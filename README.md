@@ -1,4 +1,4 @@
-Original Layout - source is Gemini
+Original Layout
 
 GeoBox/
 ├── src/                    # All source code
