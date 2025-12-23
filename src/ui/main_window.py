@@ -109,13 +109,14 @@ import sys
 import cv2
 import numpy as np
 from PySide6.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, 
-                             QPushButton, QSlider, QHBoxLayout, QFrame)
+                             QPushButton, QSlider, QHBoxLayout, QFrame, QComboBox)
 from PySide6.QtGui import QImage, QPixmap, QFont
 from PySide6.QtCore import Qt, Slot, Signal
 
 from core.kinect import KinectWorker
 from core.processor import TerrainProcessor, TerrainProcessor_Smoothened
 from modules.rain_sim import RainSimulation
+from modules.color_maps import ColorMapManager
 
 class ARSMainWindow(QMainWindow):
     def __init__(self):
@@ -127,6 +128,7 @@ class ARSMainWindow(QMainWindow):
             QWidget#Sidebar { 
                 background-color: #1e1e1e; 
                 border-right: 1px solid #333;
+                border-left: 1px solid #333;
                 min-width: 280px;
             }
             QLabel { color: #e0e0e0; font-family: 'Segoe UI'; font-size: 13px; }
@@ -159,7 +161,7 @@ class ARSMainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Sidebar setup
+        # Left Sidebar setup
         sidebar = QWidget()
         sidebar.setObjectName("Sidebar")
         side_layout = QVBoxLayout(sidebar)
@@ -185,6 +187,22 @@ class ARSMainWindow(QMainWindow):
         self.rain_btn.setObjectName("RainBtn")
         self.rain_btn.clicked.connect(self.toggle_rain)
 
+        # Right Sidebar Setup
+        right_sidebar = QWidget()
+        right_sidebar.setObjectName('Sidebar')
+        right_sidebar.setFixedWidth(200)
+
+        right_side_layout = QVBoxLayout(right_sidebar)
+        right_side_layout.setContentsMargins(20,30,20,30)
+        
+        # Colour Map Code ----------------
+        self.cmap_manager = ColorMapManager()
+        self.cmap_combo = QComboBox()
+        self.cmap_combo.addItems(self.cmap_manager.get_names())
+        self.cmap_combo.currentTextChanged.connect(self.cmap_manager.set_map_by_name)
+        # ---------------------------------
+
+        # Widget code -------------------
         side_layout.addWidget(title_label)
         side_layout.addWidget(self.slider_label)
         side_layout.addWidget(self.interval_slider)
@@ -192,7 +210,10 @@ class ARSMainWindow(QMainWindow):
         side_layout.addWidget(self.calibrate_btn)
         side_layout.addWidget(self.rain_btn)
         side_layout.addWidget(self.processor_btn)
+        side_layout.addWidget(QLabel("Colour Map"))
+        side_layout.addWidget(self.cmap_combo)
         side_layout.addStretch() # Push everything to the top
+        # --------------------------------------------------- #
 
         # Viewport setup
         self.display_label = QLabel("Initializing Depth Stream...")
@@ -201,6 +222,7 @@ class ARSMainWindow(QMainWindow):
 
         main_layout.addWidget(sidebar)
         main_layout.addWidget(self.display_label, 1) # 1 makes it expand
+        main_layout.addWidget(right_sidebar)
 
         container = QWidget()
         container.setLayout(main_layout)
@@ -250,7 +272,8 @@ class ARSMainWindow(QMainWindow):
         # 2. Elevation and Coloring
         elevation = self.active_processor.calculate_elevation(raw_frame)
         elevation_smooth = cv2.GaussianBlur(elevation, (5,5), 0)
-        color_terrain = self.active_processor.apply_color_map(elevation)
+        norm_elevation = np.clip(elevation_smooth, 0,255).astype(np.uint8)
+        color_terrain = self.cmap_manager.apply(norm_elevation)
         
         # 3. Contours
         quantized = (elevation_smooth // self.contour_interval) * self.contour_interval

@@ -84,81 +84,9 @@ class TerrainProcessor:
         dy = cv2.Sobel(elevation, cv2.CV_32F, 0, 1, ksize=3)
         return dx, dy
 
-## BETA 2.0 - usage cancelled because it did not make a difference but i'm keeping it commented for documentation purposes
-# import cv2
-# import numpy as np
-
-# class TerrainProcessor:
-#     def __init__(self, base_plane_path=None):
-#         self.base_plane = None  
-
-#     def fill_missing_data(self, depth_frame):
-#         """Fills Kinect depth shadows (0 values) using fast interpolation."""
-#         # Create a mask where depth is 0 (shadows/occlusions)
-#         mask = (depth_frame == 0).astype(np.uint8)
-        
-#         # Optimization: Early exit if no shadows are detected
-#         if not np.any(mask):
-#             return depth_frame
-
-#         # Inpaint works best on 8-bit or 16-bit. Since we normalized 
-#         # to 0-255 in the worker, uint8 is perfect here.
-#         depth_8 = depth_frame.astype(np.uint8)
-#         fixed_8 = cv2.inpaint(depth_8, mask, 3, cv2.INPAINT_TELEA)
-        
-#         return fixed_8.astype(np.float32)
-
-#     def set_base_plane(self, frame):
-#         """Captures and fixes shadows for the 'zero' reference frame."""
-#         # We sanitize the base plane so it's a solid surface without holes
-#         fixed_frame = self.fill_missing_data(frame.astype(np.float32))
-#         self.base_plane = fixed_frame
-
-#     def calculate_elevation(self, current_frame):
-#         """Calculates height after filling sensor shadows."""
-#         # 1. Fill shadows in the incoming live frame
-#         fixed_frame = self.fill_missing_data(current_frame.astype(np.float32))
-        
-#         if self.base_plane is None:
-#             return np.zeros_like(fixed_frame)
-        
-#         # 2. Elevation = Base Distance - Current Distance
-#         # Clipped at 255 to stay within 8-bit range for standard ARS setups
-#         elevation = np.clip(self.base_plane - fixed_frame, 0, 255)
-#         return elevation
-
-#     def apply_color_map(self, elevation):
-#         """Maps elevation values to RGB colors."""
-#         # Normalize to ensure full use of the JET gradient
-#         max_h = np.max(elevation) if np.max(elevation) > 0 else 1.0
-#         norm_depth = (elevation / max_h * 255).astype(np.uint8)
-#         return cv2.applyColorMap(norm_depth, cv2.COLORMAP_JET)
-    
-#     def process_frame(self, raw_frame):
-#         elev = self.calculate_elevation(raw_frame)
-#         elev_smoothed = cv2.GaussianBlur(elev, (5, 5), 0)
-#         rgb_terrain = self.apply_color_map(elev_smoothed)
-#         return rgb_terrain
-    
-#     def get_clean_contours(self, elevation_map, interval=50):
-#         """Creates sharp topographic lines via quantization."""
-#         if interval < 1: interval = 1
-#         quantized = (elevation_map // interval) * interval
-#         quantized_8 = np.clip(quantized, 0, 255).astype(np.uint8)
-#         edges = cv2.Canny(quantized_8, 1, 1)
-#         return edges
-    
-#     def get_slopes(self, elevation):
-#         """Calculates gradients for rain physics."""
-#         dx = cv2.Sobel(elevation, cv2.CV_32F, 1, 0, ksize=3)
-#         dy = cv2.Sobel(elevation, cv2.CV_32F, 0, 1, ksize=3)
-#         return dx, dy
-
 
 ## BETA 3 with filtering algorithms
 
-import numpy as np
-import cv2
 from collections import deque
 
 class TerrainProcessor_Smoothened:
@@ -271,3 +199,114 @@ class TerrainProcessor_Smoothened:
         dx = cv2.Sobel(elevation, cv2.CV_32F, 1, 0, ksize=3)
         dy = cv2.Sobel(elevation, cv2.CV_32F, 0, 1, ksize=3)
         return dx, dy
+
+
+## TESTING CODE
+# import cv2
+# import numpy as np
+
+# class TerrainProcessor:
+#     def __init__(self, registration_table=None, depth_to_rgb_shift=None):
+#         self.base_plane = None
+#         # Tables for low-level registration (pre-calculate or load from calibration)
+#         self.reg_table = registration_table  # u,v rectification table [cite: 21344]
+#         self.shift_table = depth_to_rgb_shift # Depth-to-RGB shift [cite: 21342]
+#         self.REG_SCALE = 256 
+
+#     def register_frame(self, raw_frame):
+#         """
+#         Applies registration to align depth data and remove IR camera offsets.
+#         Based on theoretical registration logic from libfreenect[cite: 21350].
+#         """
+#         h, w = raw_frame.shape
+#         registered = np.zeros((h, w), dtype=np.float32)
+        
+#         # Iterate and apply shifts (optimized via vectorization in practice) [cite: 21352]
+#         for v in range(h):
+#             for u in range(w):
+#                 raw_val = raw_frame[v, u]
+#                 if raw_val >= 2047: continue # Skip 'no-depth' values [cite: 21340]
+                
+#                 # 1. Convert raw depth to metric Z (mm) [cite: 21386]
+#                 metric_z = self._raw_to_mm(raw_val)
+                
+#                 # 2. Calculate rectified coordinates using shift tables [cite: 21357]
+#                 # Horizontal shift is depth-dependent [cite: 21344]
+#                 shift_x = self.shift_table[int(metric_z)]
+#                 reg_u = int((self.reg_table[v, u, 0] + shift_x) / self.REG_SCALE)
+#                 reg_v = int(self.reg_table[v, u, 1])
+                
+#                 # 3. Z-buffer check: store the closest depth value [cite: 21360]
+#                 if 0 <= reg_u < w and 0 <= reg_v < h:
+#                     if registered[reg_v, reg_u] == 0 or metric_z < registered[reg_v, reg_u]:
+#                         registered[reg_v, reg_u] = metric_z
+#         return registered
+
+#     def _raw_to_mm(self, raw):
+#         """Standard raw-to-metric conversion formula[cite: 21386]."""
+#         # Example constants; in practice, use device-specific calibration [cite: 25148]
+#         return 10.0 * (raw * -0.00307 + 3.33)
+
+#     def fill_missing_data(self, depth_frame):
+#         """Fills Kinect depth shadows (0 values) using fast interpolation."""
+#         # Create a mask where depth is 0 (shadows/occlusions)
+#         mask = (depth_frame == 0).astype(np.uint8)
+        
+#         # Optimization: Early exit if no shadows are detected
+#         if not np.any(mask):
+#             return depth_frame
+
+#         # Inpaint works best on 8-bit or 16-bit. Since we normalized 
+#         # to 0-255 in the worker, uint8 is perfect here.
+#         depth_8 = depth_frame.astype(np.uint8)
+#         fixed_8 = cv2.inpaint(depth_8, mask, 3, cv2.INPAINT_TELEA)
+        
+#         return fixed_8.astype(np.float32)
+
+#     def set_base_plane(self, frame):
+#         """Captures and fixes shadows for the 'zero' reference frame."""
+#         # We sanitize the base plane so it's a solid surface without holes
+#         fixed_frame = self.fill_missing_data(frame.astype(np.float32))
+#         self.base_plane = fixed_frame
+
+#     def calculate_elevation(self, current_frame):
+#         """Calculates height after filling sensor shadows."""
+#         # 1. Fill shadows in the incoming live frame
+#         fixed_frame = self.fill_missing_data(current_frame.astype(np.float32))
+        
+#         if self.base_plane is None:
+#             return np.zeros_like(fixed_frame)
+        
+#         # 2. Elevation = Base Distance - Current Distance
+#         # Clipped at 255 to stay within 8-bit range for standard ARS setups
+#         elevation = np.clip(self.base_plane - fixed_frame, 0, 255)
+#         return elevation
+
+#     def apply_color_map(self, elevation):
+#         """Maps elevation values to RGB colors."""
+#         # Normalize to ensure full use of the JET gradient
+#         max_h = np.max(elevation) if np.max(elevation) > 0 else 1.0
+#         norm_depth = (elevation / max_h * 255).astype(np.uint8)
+#         return cv2.applyColorMap(norm_depth, cv2.COLORMAP_JET)
+    
+#     def process_frame(self, raw_frame):
+#         # Apply low-level registration first to fix offsets
+#         reg_depth = self.register_frame(raw_frame)
+#         # Proceed with elevation calculation on registered data
+#         elev = self.calculate_elevation(reg_depth)
+#         elev_smoothed = cv2.GaussianBlur(elev, (5, 5), 0)
+#         return self.apply_color_map(elev_smoothed)
+    
+#     def get_clean_contours(self, elevation_map, interval=50):
+#         """Creates sharp topographic lines via quantization."""
+#         if interval < 1: interval = 1
+#         quantized = (elevation_map // interval) * interval
+#         quantized_8 = np.clip(quantized, 0, 255).astype(np.uint8)
+#         edges = cv2.Canny(quantized_8, 1, 1)
+#         return edges
+    
+#     def get_slopes(self, elevation):
+#         """Calculates gradients for rain physics."""
+#         dx = cv2.Sobel(elevation, cv2.CV_32F, 1, 0, ksize=3)
+#         dy = cv2.Sobel(elevation, cv2.CV_32F, 0, 1, ksize=3)
+#         return dx, dy
