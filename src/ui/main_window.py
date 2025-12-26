@@ -117,6 +117,7 @@ from core.kinect import KinectWorker
 from core.processor import TerrainProcessor, TerrainProcessor_Smoothened
 from modules.rain_sim import RainSimulation
 from modules.color_maps import ColorMapManager
+from modules.contour_match import ContourMatchManager
 
 class ARSMainWindow(QMainWindow):
     def __init__(self):
@@ -152,6 +153,13 @@ class ARSMainWindow(QMainWindow):
         self.contour_interval = 50
         self.capture_next_as_base = False
         self.rain_enabled = False
+        # For contour matching module
+        self.dem_manager = ContourMatchManager()
+        self.record_dem_btn = QPushButton("Record Current Sand")
+        self.record_dem_btn.clicked.connect(self.record_current_topography)
+
+        self.load_dem_btn = QPushButton("Load DEM")
+        self.load_dem_btn.clicked.connect(self.load_target_dem)
 
         self.active_processor = self.processor_raw
         self.filtering_enabled = False
@@ -215,6 +223,12 @@ class ARSMainWindow(QMainWindow):
         side_layout.addStretch() # Push everything to the top
         # --------------------------------------------------- #
 
+        # Right side widgets ------------------------
+        right_side_layout.addWidget(QLabel("Match Contour Module"))
+        right_side_layout.addWidget(self.record_dem_btn)
+        right_side_layout.addWidget(self.load_dem_btn)
+        right_side_layout.addStretch()
+
         # Viewport setup
         self.display_label = QLabel("Initializing Depth Stream...")
         self.display_label.setAlignment(Qt.AlignCenter)
@@ -261,8 +275,24 @@ class ARSMainWindow(QMainWindow):
         self.contour_interval = value
         self.slider_label.setText(f"Contour Interval: {self.contour_interval}")
 
+    def record_current_topography(self):
+    # Capture the current live frame and save it
+    # raw_frame here would be the latest from your worker
+        if hasattr(self, 'last_raw_frame'):
+            self.dem_manager.save_current_sand_as_dem(self.last_raw_frame)
+
+    def load_target_dem(self):
+        # Use a file dialog to pick a .dem (NumPy) file
+        from PySide6.QtWidgets import QFileDialog
+        fname, _ = QFileDialog.getOpenFileName(self, "Open DEM", "", "DEM Files (*.dem.npy)")
+        if fname:
+            self.dem_manager.load_dem(fname)
+
     @Slot(np.ndarray)
     def update_frame(self, raw_frame):
+        # Store frame for the record_current_topography method
+        self.last_raw_frame = raw_frame.copy()
+
         # 1. Base Plane Capture
         if self.capture_next_as_base:
             self.active_processor.set_base_plane(raw_frame)
@@ -272,8 +302,15 @@ class ARSMainWindow(QMainWindow):
         # 2. Elevation and Coloring
         elevation = self.active_processor.calculate_elevation(raw_frame)
         elevation_smooth = cv2.GaussianBlur(elevation, (5,5), 0)
-        norm_elevation = np.clip(elevation_smooth, 0,255).astype(np.uint8)
-        color_terrain = self.cmap_manager.apply(norm_elevation)
+
+        if self.dem_manager.is_matching_mode:
+            color_terrain, score = self.dem_manager.calculate_matching_guide(raw_frame)
+            cv2.putText(color_terrain, f"RMSE: {score:.2f}mm", (20,40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+        else:
+            #elevation_smooth = cv2.GaussianBlur(elevation, (5,5), 0)
+            norm_elevation = np.clip(elevation_smooth, 0,255).astype(np.uint8)
+            color_terrain = self.cmap_manager.apply(norm_elevation)
         
         # 3. Contours
         quantized = (elevation_smooth // self.contour_interval) * self.contour_interval
