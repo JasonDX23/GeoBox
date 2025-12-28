@@ -125,27 +125,29 @@ class ARSMainWindow(QMainWindow):
         self.setWindowTitle("GeoBox")
         self.resize(1200, 800)
         self.setStyleSheet("""
-            QMainWindow { background-color: #121212; }
-            QWidget#Sidebar { 
-                background-color: #1e1e1e; 
-                border-right: 1px solid #333;
-                border-left: 1px solid #333;
-                min-width: 280px;
-            }
-            QLabel { color: #e0e0e0; font-family: 'Segoe UI'; font-size: 13px; }
-            QLabel#Title { font-size: 18px; font-weight: bold; color: #3d5afe; margin-bottom: 10px; }
-            QPushButton { 
-                background-color: #3d5afe; color: white; border-radius: 4px; 
-                padding: 12px; font-weight: bold; border: none; margin-top: 5px;
-            }
-            QPushButton:hover { background-color: #536dfe; }
-            QPushButton#RainBtn[active="true"] { background-color: #f44336; }
-            QSlider::groove:horizontal { height: 4px; background: #333; border-radius: 2px; }
-            QSlider::handle:horizontal { 
-                background: #3d5afe; width: 16px; height: 16px; 
-                margin: -6px 0; border-radius: 8px; 
-            }
-        """)
+        QMainWindow { background-color: #000000; }
+        #OverlayPanel { 
+            background-color: rgba(30, 30, 30, 180); 
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 30);
+        }
+        QPushButton { 
+            background-color: #2c2c2c; 
+            border: 1px solid #444; 
+            color: #eee;
+            padding: 8px;
+        }
+        QPushButton:checked {
+            background-color: #0078d7; /* Active Blue */
+            border-color: #00a4ef;
+        }
+        QSlider::handle:horizontal {
+            background: #00a4ef;
+            width: 14px;
+            height: 14px;
+            margin: -5px 0;
+        }
+    """)
 
         self.processor_raw = TerrainProcessor()
         self.processor_filtered = TerrainProcessor_Smoothened()
