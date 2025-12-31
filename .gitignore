@@ -8,3 +8,4 @@ wheels/
 assets/config/
 # Virtual environments
 .venv
+open_ar_sandbox.txt

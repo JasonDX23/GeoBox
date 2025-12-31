@@ -115,8 +115,9 @@ from PySide6.QtCore import Qt, Slot, Signal
 
 from core.kinect import KinectWorker
 from core.processor import TerrainProcessor, TerrainProcessor_Smoothened
-from modules.rain_sim import RainSimulation
+#from modules.rain_sim import RainSimulation
 from modules.color_maps import ColorMapManager
+from modules.contour_match import ContourMatchManager
 
 class ARSMainWindow(QMainWindow):
     def __init__(self):
@@ -124,34 +125,43 @@ class ARSMainWindow(QMainWindow):
         self.setWindowTitle("GeoBox")
         self.resize(1200, 800)
         self.setStyleSheet("""
-            QMainWindow { background-color: #121212; }
-            QWidget#Sidebar { 
-                background-color: #1e1e1e; 
-                border-right: 1px solid #333;
-                border-left: 1px solid #333;
-                min-width: 280px;
-            }
-            QLabel { color: #e0e0e0; font-family: 'Segoe UI'; font-size: 13px; }
-            QLabel#Title { font-size: 18px; font-weight: bold; color: #3d5afe; margin-bottom: 10px; }
-            QPushButton { 
-                background-color: #3d5afe; color: white; border-radius: 4px; 
-                padding: 12px; font-weight: bold; border: none; margin-top: 5px;
-            }
-            QPushButton:hover { background-color: #536dfe; }
-            QPushButton#RainBtn[active="true"] { background-color: #f44336; }
-            QSlider::groove:horizontal { height: 4px; background: #333; border-radius: 2px; }
-            QSlider::handle:horizontal { 
-                background: #3d5afe; width: 16px; height: 16px; 
-                margin: -6px 0; border-radius: 8px; 
-            }
-        """)
+        QMainWindow { background-color: #000000; }
+        #OverlayPanel { 
+            background-color: rgba(30, 30, 30, 180); 
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 30);
+        }
+        QPushButton { 
+            background-color: #2c2c2c; 
+            border: 1px solid #444; 
+            color: #eee;
+            padding: 8px;
+        }
+        QPushButton:checked {
+            background-color: #0078d7; /* Active Blue */
+            border-color: #00a4ef;
+        }
+        QSlider::handle:horizontal {
+            background: #00a4ef;
+            width: 14px;
+            height: 14px;
+            margin: -5px 0;
+        }
+    """)
 
         self.processor_raw = TerrainProcessor()
         self.processor_filtered = TerrainProcessor_Smoothened()
-        self.rain_sim = RainSimulation(count=300)
+        #self.rain_sim = RainSimulation(count=300)
         self.contour_interval = 50
         self.capture_next_as_base = False
         self.rain_enabled = False
+        # For contour matching module
+        self.dem_manager = ContourMatchManager()
+        self.record_dem_btn = QPushButton("Record Current Sand")
+        self.record_dem_btn.clicked.connect(self.record_current_topography)
+
+        self.load_dem_btn = QPushButton("Load DEM")
+        self.load_dem_btn.clicked.connect(self.load_target_dem)
 
         self.active_processor = self.processor_raw
         self.filtering_enabled = False
@@ -183,9 +193,9 @@ class ARSMainWindow(QMainWindow):
         self.calibrate_btn = QPushButton("Calibrate Kinect")
         self.calibrate_btn.clicked.connect(self.reset_base_plane)
 
-        self.rain_btn = QPushButton("Rain Simulation: OFF")
-        self.rain_btn.setObjectName("RainBtn")
-        self.rain_btn.clicked.connect(self.toggle_rain)
+        # self.rain_btn = QPushButton("Rain Simulation: OFF")
+        # self.rain_btn.setObjectName("RainBtn")
+        # self.rain_btn.clicked.connect(self.toggle_rain)
 
         # Right Sidebar Setup
         right_sidebar = QWidget()
@@ -208,12 +218,18 @@ class ARSMainWindow(QMainWindow):
         side_layout.addWidget(self.interval_slider)
         side_layout.addSpacing(20)
         side_layout.addWidget(self.calibrate_btn)
-        side_layout.addWidget(self.rain_btn)
+        #side_layout.addWidget(self.rain_btn)
         side_layout.addWidget(self.processor_btn)
         side_layout.addWidget(QLabel("Colour Map"))
         side_layout.addWidget(self.cmap_combo)
         side_layout.addStretch() # Push everything to the top
         # --------------------------------------------------- #
+
+        # Right side widgets ------------------------
+        right_side_layout.addWidget(QLabel("Match Contour Module"))
+        right_side_layout.addWidget(self.record_dem_btn)
+        right_side_layout.addWidget(self.load_dem_btn)
+        right_side_layout.addStretch()
 
         # Viewport setup
         self.display_label = QLabel("Initializing Depth Stream...")
@@ -249,20 +265,36 @@ class ARSMainWindow(QMainWindow):
             self.active_processor = self.processor_raw
             self.processor_btn.setText("Spatial Filtering: OFF")
 
-    def toggle_rain(self):
-        self.rain_enabled = not self.rain_enabled
-        status = "ON" if self.rain_enabled else "OFF"
-        self.rain_btn.setText(f"Rain Simulation: {status}")
-        self.rain_btn.setProperty("active", str(self.rain_enabled).lower())
-        self.rain_btn.style().unpolish(self.rain_btn) # Force style refresh
-        self.rain_btn.style().polish(self.rain_btn)
+    # def toggle_rain(self):
+    #     self.rain_enabled = not self.rain_enabled
+    #     status = "ON" if self.rain_enabled else "OFF"
+    #     self.rain_btn.setText(f"Rain Simulation: {status}")
+    #     self.rain_btn.setProperty("active", str(self.rain_enabled).lower())
+    #     self.rain_btn.style().unpolish(self.rain_btn) # Force style refresh
+    #     self.rain_btn.style().polish(self.rain_btn)
 
     def update_interval_value(self, value):
         self.contour_interval = value
         self.slider_label.setText(f"Contour Interval: {self.contour_interval}")
 
+    def record_current_topography(self):
+    # Capture the current live frame and save it
+    # raw_frame here would be the latest from your worker
+        if hasattr(self, 'last_raw_frame'):
+            self.dem_manager.save_current_sand_as_dem(self.last_raw_frame)
+
+    def load_target_dem(self):
+        # Use a file dialog to pick a .dem (NumPy) file
+        from PySide6.QtWidgets import QFileDialog
+        fname, _ = QFileDialog.getOpenFileName(self, "Open DEM", "", "DEM Files (*.dem.npy)")
+        if fname:
+            self.dem_manager.load_dem(fname)
+
     @Slot(np.ndarray)
     def update_frame(self, raw_frame):
+        # Store frame for the record_current_topography method
+        self.last_raw_frame = raw_frame.copy()
+
         # 1. Base Plane Capture
         if self.capture_next_as_base:
             self.active_processor.set_base_plane(raw_frame)
@@ -272,8 +304,15 @@ class ARSMainWindow(QMainWindow):
         # 2. Elevation and Coloring
         elevation = self.active_processor.calculate_elevation(raw_frame)
         elevation_smooth = cv2.GaussianBlur(elevation, (5,5), 0)
-        norm_elevation = np.clip(elevation_smooth, 0,255).astype(np.uint8)
-        color_terrain = self.cmap_manager.apply(norm_elevation)
+
+        if self.dem_manager.is_matching_mode:
+            color_terrain, score = self.dem_manager.calculate_matching_guide(raw_frame)
+            cv2.putText(color_terrain, f"RMSE: {score:.2f}mm", (20,40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+        else:
+            #elevation_smooth = cv2.GaussianBlur(elevation, (5,5), 0)
+            norm_elevation = np.clip(elevation_smooth, 0,255).astype(np.uint8)
+            color_terrain = self.cmap_manager.apply(norm_elevation)
         
         # 3. Contours
         quantized = (elevation_smooth // self.contour_interval) * self.contour_interval
@@ -281,12 +320,12 @@ class ARSMainWindow(QMainWindow):
         color_terrain[contours > 0] = [0, 0, 0]
         
         # 4. Rain Simulation (FIXED VARIABLE NAME HERE)
-        if self.rain_enabled:
-            # We use active_processor so rain flows correctly on filtered sand
-            dx, dy = self.active_processor.get_slopes(elevation) 
-            self.rain_sim.update(dx, dy)
-            for p in self.rain_sim.particles:
-                cv2.circle(color_terrain, (int(p[0]), int(p[1])), 2, (255, 0, 0), -1)
+        # if self.rain_enabled:
+        #     # We use active_processor so rain flows correctly on filtered sand
+        #     dx, dy = self.active_processor.get_slopes(elevation) 
+        #     self.rain_sim.update(dx, dy)
+        #     for p in self.rain_sim.particles:
+        #         cv2.circle(color_terrain, (int(p[0]), int(p[1])), 2, (255, 0, 0), -1)
         
         # 5. Render to UI
         h, w, ch = color_terrain.shape
