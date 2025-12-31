@@ -115,7 +115,7 @@ from PySide6.QtCore import Qt, Slot, Signal
 
 from core.kinect import KinectWorker
 from core.processor import TerrainProcessor, TerrainProcessor_Smoothened
-from modules.rain_sim import RainSimulation
+#from modules.rain_sim import RainSimulation
 from modules.color_maps import ColorMapManager
 from modules.contour_match import ContourMatchManager
 
@@ -151,7 +151,7 @@ class ARSMainWindow(QMainWindow):
 
         self.processor_raw = TerrainProcessor()
         self.processor_filtered = TerrainProcessor_Smoothened()
-        self.rain_sim = RainSimulation(count=300)
+        #self.rain_sim = RainSimulation(count=300)
         self.contour_interval = 50
         self.capture_next_as_base = False
         self.rain_enabled = False
@@ -193,9 +193,9 @@ class ARSMainWindow(QMainWindow):
         self.calibrate_btn = QPushButton("Calibrate Kinect")
         self.calibrate_btn.clicked.connect(self.reset_base_plane)
 
-        self.rain_btn = QPushButton("Rain Simulation: OFF")
-        self.rain_btn.setObjectName("RainBtn")
-        self.rain_btn.clicked.connect(self.toggle_rain)
+        # self.rain_btn = QPushButton("Rain Simulation: OFF")
+        # self.rain_btn.setObjectName("RainBtn")
+        # self.rain_btn.clicked.connect(self.toggle_rain)
 
         # Right Sidebar Setup
         right_sidebar = QWidget()
@@ -218,7 +218,7 @@ class ARSMainWindow(QMainWindow):
         side_layout.addWidget(self.interval_slider)
         side_layout.addSpacing(20)
         side_layout.addWidget(self.calibrate_btn)
-        side_layout.addWidget(self.rain_btn)
+        #side_layout.addWidget(self.rain_btn)
         side_layout.addWidget(self.processor_btn)
         side_layout.addWidget(QLabel("Colour Map"))
         side_layout.addWidget(self.cmap_combo)
@@ -265,13 +265,13 @@ class ARSMainWindow(QMainWindow):
             self.active_processor = self.processor_raw
             self.processor_btn.setText("Spatial Filtering: OFF")
 
-    def toggle_rain(self):
-        self.rain_enabled = not self.rain_enabled
-        status = "ON" if self.rain_enabled else "OFF"
-        self.rain_btn.setText(f"Rain Simulation: {status}")
-        self.rain_btn.setProperty("active", str(self.rain_enabled).lower())
-        self.rain_btn.style().unpolish(self.rain_btn) # Force style refresh
-        self.rain_btn.style().polish(self.rain_btn)
+    # def toggle_rain(self):
+    #     self.rain_enabled = not self.rain_enabled
+    #     status = "ON" if self.rain_enabled else "OFF"
+    #     self.rain_btn.setText(f"Rain Simulation: {status}")
+    #     self.rain_btn.setProperty("active", str(self.rain_enabled).lower())
+    #     self.rain_btn.style().unpolish(self.rain_btn) # Force style refresh
+    #     self.rain_btn.style().polish(self.rain_btn)
 
     def update_interval_value(self, value):
         self.contour_interval = value
@@ -320,12 +320,12 @@ class ARSMainWindow(QMainWindow):
         color_terrain[contours > 0] = [0, 0, 0]
         
         # 4. Rain Simulation (FIXED VARIABLE NAME HERE)
-        if self.rain_enabled:
-            # We use active_processor so rain flows correctly on filtered sand
-            dx, dy = self.active_processor.get_slopes(elevation) 
-            self.rain_sim.update(dx, dy)
-            for p in self.rain_sim.particles:
-                cv2.circle(color_terrain, (int(p[0]), int(p[1])), 2, (255, 0, 0), -1)
+        # if self.rain_enabled:
+        #     # We use active_processor so rain flows correctly on filtered sand
+        #     dx, dy = self.active_processor.get_slopes(elevation) 
+        #     self.rain_sim.update(dx, dy)
+        #     for p in self.rain_sim.particles:
+        #         cv2.circle(color_terrain, (int(p[0]), int(p[1])), 2, (255, 0, 0), -1)
         
         # 5. Render to UI
         h, w, ch = color_terrain.shape
