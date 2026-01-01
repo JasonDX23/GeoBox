@@ -124,30 +124,30 @@ class ARSMainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("GeoBox")
         self.resize(1200, 800)
-        self.setStyleSheet("""
-        QMainWindow { background-color: #000000; }
-        #OverlayPanel { 
-            background-color: rgba(30, 30, 30, 180); 
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 30);
-        }
-        QPushButton { 
-            background-color: #2c2c2c; 
-            border: 1px solid #444; 
-            color: #eee;
-            padding: 8px;
-        }
-        QPushButton:checked {
-            background-color: #0078d7; /* Active Blue */
-            border-color: #00a4ef;
-        }
-        QSlider::handle:horizontal {
-            background: #00a4ef;
-            width: 14px;
-            height: 14px;
-            margin: -5px 0;
-        }
-    """)
+    #     self.setStyleSheet("""
+    #     QMainWindow { background-color: #000000; }
+    #     #OverlayPanel { 
+    #         background-color: rgba(30, 30, 30, 180); 
+    #         border-radius: 10px;
+    #         border: 1px solid rgba(255, 255, 255, 30);
+    #     }
+    #     QPushButton { 
+    #         background-color: #2c2c2c; 
+    #         border: 1px solid #444; 
+    #         color: #eee;
+    #         padding: 8px;
+    #     }
+    #     QPushButton:checked {
+    #         background-color: #0078d7; /* Active Blue */
+    #         border-color: #00a4ef;
+    #     }
+    #     QSlider::handle:horizontal {
+    #         background: #00a4ef;
+    #         width: 14px;
+    #         height: 14px;
+    #         margin: -5px 0;
+    #     }
+    # """)
 
         self.processor_raw = TerrainProcessor()
         self.processor_filtered = TerrainProcessor_Smoothened()
