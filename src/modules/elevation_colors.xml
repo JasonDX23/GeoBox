@@ -1,0 +1,2 @@
+<ColorMap name="Standard-Terrain">
+    <step height="0"   r="0"   g="0"   b="128" /> <step height="40"  r="0"   g="128" b="255" /> <step height="60"  r="240" g="240" b="64"  /> <step height="100" r="32"  g="160" b="32"  /> <step height="180" r="128" g="64"  b="0"   /> <step height="255" r="255" g="255" b="255" /> </ColorMap>

@@ -1,0 +1,14 @@
+<ColorMap name="Deep-Variation-Terrain">
+    <step height="-220.0" r="0"   g="0"   b="40"  /> <step height="-190.0" r="0"   g="15"  b="70"  /> <step height="-160.0" r="0"   g="35"  b="110" /> <step height="-120.0" r="0"   g="55"  b="140" /> <step height="-80.0"  r="0"   g="75"  b="170" /> <step height="-40.0"  r="20"  g="110" b="190" /> <step height="-30.54" r="19"  g="108" b="160" />
+    <step height="-7.0"   r="24"  g="140" b="205" />
+    <step height="-2.0"   r="135" g="206" b="250" />
+    
+    <step height="0.0"    r="176" g="226" b="255" />
+    <step height="2.0"    r="16"  g="122" b="47"  />
+    <step height="25.0"   r="232" g="215" b="125" />
+    <step height="60.0"   r="161" g="67"  b="0"   />
+    <step height="90.0"   r="130" g="30"  b="30"  />
+    <step height="140.0"  r="161" g="161" b="161" />
+    <step height="200.0"  r="206" g="206" b="206" />
+    <step height="220.0"  r="255" g="255" b="255" />
+</ColorMap>

@@ -1,34 +1,79 @@
 import cv2
 import numpy as np
+import xml.etree.ElementTree as ET
+import os
 
 class ColorMapManager:
-    ### WORKING BASE CODE ###
     def __init__(self):
-        # Dynamically find all COLORMAP_ constants in the cv2 library
+        # 1. Initialize original OpenCV maps
         self.available_maps = {
             name.replace("COLORMAP_", "").capitalize(): getattr(cv2, name)
             for name in dir(cv2) if name.startswith("COLORMAP_")
         }
-        # Set a default starting map
+        self.sea_level_offset = 0.0
+        
+        # 2. Set hard fallbacks to prevent AttributeErrors
         self.current_map_id = cv2.COLORMAP_JET
+        self.use_custom = False
+        self.custom_lut = None
 
+        # 3. Load the XML (This will update the default if successful)
+        # Ensure this path matches your project structure exactly
+        xml_path = "src/modules/hypsometric_tints.xml" 
+        self.load_custom_xml(xml_path)
+
+    def set_sea_level(self, value):
+        """Sets the sea level offset in mm."""
+        self.sea_level_offset = float(value)
+
+    def load_custom_xml(self, path):
+        if not os.path.exists(path):
+            return
+            
+        tree = ET.parse(path)
+        root = tree.getroot()
+        heights = []
+        colors = []
+        
+        for step in root.findall('step'):
+            heights.append(float(step.get('height')))
+            # Store as BGR for OpenCV compatibility
+            colors.append([int(step.get('b')), int(step.get('g')), int(step.get('r'))])
+
+        # Define the "Working Window" of your sandbox
+        # This range should encompass your lowest and highest XML keys
+        min_h, max_h = -250, 250 
+        lut_range = np.linspace(min_h, max_h, 256)
+        
+        lut = np.zeros((256, 3), dtype=np.uint8)
+        for i in range(3): # For B, G, R channels
+            fp = [c[i] for c in colors]
+            # Interpolate the XML colors across the 256-step LUT
+            lut[:, i] = np.interp(lut_range, heights, fp)
+        
+        self.custom_lut = lut.reshape((256, 1, 3)).astype(np.uint8)
+        self.available_maps[root.get('name', 'Custom')] = "CUSTOM"        
     def get_names(self):
-        """Returns a list of human-readable names for the GUI combo box."""
         return list(self.available_maps.keys())
 
     def set_map_by_name(self, name):
-        """Updates the internal ID based on the selection name."""
-        if name in self.available_maps:
-            self.current_map_id = self.available_maps[name]
+        """Switch between OpenCV presets and Custom LUT."""
+        val = self.available_maps.get(name, cv2.COLORMAP_JET)
+        if val == "CUSTOM":
+            self.use_custom = True
+        else:
+            self.use_custom = False
+            self.current_map_id = val
 
     def apply(self, elevation_8bit):
-        """
-        Applies the selected OpenCV colormap.
-        Input must be an 8-bit single-channel image (0-255).
-        """
-        return cv2.applyColorMap(elevation_8bit, self.current_map_id)
-
-
+        """Applies the color logic to the 8-bit depth frame."""
+        if self.use_custom and self.custom_lut is not None:
+            # cv2.LUT requires a 3-channel input to apply a 3-channel LUT
+            # We merge the grayscale frame into 3 channels first
+            merge_img = cv2.merge([elevation_8bit, elevation_8bit, elevation_8bit])
+            return cv2.LUT(merge_img, self.custom_lut)
+        else:
+            return cv2.applyColorMap(elevation_8bit, self.current_map_id)
 
 ## Code to include slider to change colours to different heights - does not work well yet    
     # def __init__(self):

@@ -4,36 +4,101 @@ import numpy as np
 import cv2
 
 class TerrainProcessor:
-    def __init__(self, base_plane_path=None):
+    def __init__(self):
         self.base_plane = None  # Will store the "empty sandbox" depth map
         # Standard Kinect v1 raw-to-metric approximation if needed:
         # depth_m = 1.0 / (raw_depth * -0.0030711016 + 3.3309495161)
+        self.plane_params = None
+        self.fx = 580.0 
+        self.fy = 580.0
+        self.cx = 320.0
+        self.cy = 240.0
+        y, x = np.indices((480, 640))
+        self.x_multiplier = (x - self.cx) / self.fx
+        self.y_multiplier = (y - self.cy) / self.fy
 
-    def set_base_plane(self, frame):
-        """Captures the current frame as the 'zero' elevation reference."""
-        self.base_plane = frame.astype(np.float32)
-
-    def calculate_elevation(self, current_frame):
-        """Calculates height of sand relative to the bottom."""
-        if self.base_plane is None:
-            return np.zeros_like(current_frame)
+    def depth_to_world(self, depth_map):
+        """Converts depth map to (N, 3) point cloud in millimeters."""
+        h, w = depth_map.shape
+        v, u = np.mgrid[0:h, 0:w]
         
-        # Elevation = Base Distance - Current Distance
-        # We use clip to ensure no negative height (below the box floor)
-        elevation = np.clip(self.base_plane - current_frame, 0, 1000)
-        return elevation
+        # Filter zero/invalid depth
+        mask = depth_map > 0
+        z = depth_map[mask].astype(float)
+        x = (u[mask] - self.cx) * z / self.fx
+        y = (v[mask] - self.cy) * z / self.fy
+        
+        return np.column_stack((x, y, z))
+    
+    def depth_to_world_cropped(self, cropped_depth):
+        # Use the pre-sliced multipliers for consistent 3D points
+        mask = cropped_depth > 0
+        z = cropped_depth[mask].astype(float)
+        x = self.x_multiplier[mask] * z
+        y = self.y_multiplier[mask] * z
+        return np.column_stack((x, y, z))
+
+    def set_base_plane(self, flat_sand_frame):
+        # Ensure we only fit the plane to sand inside the ROI
+        if hasattr(self, 'roi') and self.roi is not None:
+            x, y, w, h = self.roi
+            flat_sand_frame = flat_sand_frame[y:y+h, x:x+w]
+        """Fits a plane using memory-efficient Covariance + SVD."""
+        points = self.depth_to_world(flat_sand_frame)
+        centroid = np.mean(points, axis=0)
+        pts_centered = points - centroid
+
+        # Instead of SVD on (N, 3), use SVD on the (3, 3) covariance matrix
+        # This avoids the N x N memory allocation entirely
+        cov = np.dot(pts_centered.T, pts_centered) 
+        _, _, vh = np.linalg.svd(cov)
+        
+        # The normal is the eigenvector corresponding to the smallest eigenvalue
+        # In the SVD of the covariance matrix, this is the last row of Vh
+        normal = vh[2, :] 
+        
+        # Ensure the normal points 'up' toward the sensor
+        if normal[2] < 0:
+            normal = -normal
+
+        d = -np.dot(normal, centroid)
+        self.plane_params = np.append(normal, d)
+
+    def update_roi(self, x, y, w, h):
+        self.roi = (x, y, w, h)
+        # Re-slice the multipliers to match the new window
+        # This keeps the 3D projection mathematically sound
+        full_y, full_x = np.indices((480, 640))
+        self.x_multiplier = ((full_x[y:y+h, x:x+w] - self.cx) / self.fx).astype(np.float32)
+        self.y_multiplier = ((full_y[y:y+h, x:x+w] - self.cy) / self.fy).astype(np.float32)
+
+    def calculate_elevation(self, raw_frame):
+        if self.plane_params is None or self.roi is None:
+            return np.zeros_like(raw_frame, dtype=np.float32)
+            
+        x_roi, y_roi, w, h = self.roi
+        z = raw_frame[y_roi:y_roi+h, x_roi:x_roi+w].astype(np.float32)
+        
+        a, b, c, d = self.plane_params
+        
+        # Calculate perpendicular distance
+        current_dist = (a * self.x_multiplier * z) + (b * self.y_multiplier * z) + (c * z) + d
+        
+        # CHANGE THIS LINE: 
+        # If -current_dist was blue peaks, use current_dist
+        elevation = -current_dist 
+        
+        # Clip to a realistic range (0 to 150mm)
+        return np.clip(elevation, 0, 150)
     
     def apply_color_map(self, elevation):
-        """Maps elevation values to RGB colors using a custom LUT."""
-        # Normalize elevation to 0-255 for 8-bit color mapping
-        max_height = np.max(elevation) if np.max(elevation) > 0 else 1.0
-        norm_depth = (elevation / max_height * 255).astype(np.uint8)
-
-        # Create a custom 256-entry gradient (Simplified Example)
-        # In practice, you would define specific 'stops' for sea, land, mountain
-        color_map = cv2.applyColorMap(norm_depth, cv2.COLORMAP_JET)
+        # Set this to the physical depth of your box in millimeters
+        # Any sand higher than this will be pure white (255)
+        # The floor will be 0 (Blue)
+        max_height_mm = 254
         
-        return color_map
+        norm_depth = (elevation / max_height_mm) * 255
+        return np.clip(norm_depth, 0, 255).astype(np.uint8)
     
     def process_frame(self, raw_frame):
         # 1. Calculate height
@@ -44,7 +109,7 @@ class TerrainProcessor:
         rgb_terrain = self.apply_color_map(elev_smoothed)
         return rgb_terrain
     
-    def generate_contours(elevation_map, interval=50, thickness=2):
+    def generate_contours(elevation_map, interval=50, thickness=1):
         """
         Creates a binary mask of topographic lines.
         elevation_map: 2D float32 array from calculate_elevation()
@@ -64,14 +129,19 @@ class TerrainProcessor:
         
         return contour_mask
     
-    def get_clean_contours(elevation_map, interval=50):
-        # Quantize the elevation (create 'stairs' in the terrain)
-        quantized = (elevation_map // interval) * interval
-        # Convert to 8-bit for OpenCV processing
-        quantized_8 = np.clip(quantized, 0, 255).astype(np.uint8)
-        # Detect edges between the 'stairs'
-        edges = cv2.Canny(quantized_8, 1, 1)
-        return edges
+    def get_clean_contours(self, elevation_map, interval=20):
+        # 1. Smoothing is vital before contouring to stop "wobbly" lines
+        smoothed = cv2.GaussianBlur(elevation_map, (7, 7), 0)
+        
+        # 2. Quantize
+        quantized = (smoothed // interval) * interval
+        
+        # 3. Use Laplacian or Canny to find the steps
+        edges = cv2.Canny(quantized.astype(np.uint8), 1, 1)
+        
+        # 4. Thicken the lines slightly for better projection visibility
+        kernel = np.ones((2,2), np.uint8)
+        return cv2.dilate(edges, kernel, iterations=1)
     
     def overlay_contours(rgb_image, contour_mask):
         # Make contours black (0,0,0) where the mask is active
