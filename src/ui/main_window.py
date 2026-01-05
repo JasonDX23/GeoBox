@@ -118,7 +118,7 @@ from core.kinect import KinectWorker
 from core.processor import TerrainProcessor, TerrainProcessor_Smoothened
 from modules.color_maps import ColorMapManager
 from modules.contour_match import ContourMatchManager
-from core.KinectProjector_calibration import KinectProjector
+from core.KinectProjector import KinectProjector
 
 class ProjectorWindow(QWidget):
     """The dedicated full-screen window for the projector (Secondary Screen)."""
