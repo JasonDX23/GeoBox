@@ -6,10 +6,7 @@ dist/
 wheels/
 *.egg-info
 assets/config/
-freenect_sync.dll
-freenect.dll
-libusb-1.0.dll
-pthreadVC2.dll
+
 # Virtual environments
 .venv
 open_ar_sandbox.txt
