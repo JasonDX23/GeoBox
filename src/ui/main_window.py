@@ -209,7 +209,7 @@ class ARSMainWindow(QMainWindow):
         self.roi_btn.clicked.connect(self.enter_roi_mode)
 
         # Assemble Sidebar
-        side_layout.addWidget(QLabel("GEOBOX CONTROLS"))
+        side_layout.addWidget(QLabel("GeoBox Controls"))
         side_layout.addWidget(self.slider_label)
         side_layout.addWidget(self.interval_slider)
         side_layout.addSpacing(20)

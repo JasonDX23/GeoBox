@@ -37,7 +37,7 @@ class ProjectorWindow(QWidget):
 class CalibrationUtility(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("GeoBox Pro Calibration")
+        self.setWindowTitle("GeoBox Calibration")
         
         # Core Components
         self.projector_res = (1024, 768)
