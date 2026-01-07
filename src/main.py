@@ -5,7 +5,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from PySide6.QtWidgets import QApplication
-from ui.main_window import ARSMainWindow
+from ui.gui_V2 import GeoBox
 
 def main():
     # 1. Initialize the Qt Application
@@ -14,7 +14,7 @@ def main():
 
     # 2. Instantiate the Main Window
     # This will automatically start the KinectWorker thread
-    window = ARSMainWindow()
+    window = GeoBox()
     window.show()
 
     # 3. Execute the Application loop
