@@ -1,0 +1,5 @@
+numpy>=1.21.0
+opencv-python>=4.5.0
+freenect>=0.0.1
+matplotlib>=3.4.0
+PySide6>=6.0.0

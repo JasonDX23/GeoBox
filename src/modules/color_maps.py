@@ -1,66 +1,47 @@
-import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 
-class ColorMapManager:
-    ### WORKING BASE CODE ###
+class HybridColorMapper:
     def __init__(self):
-        # Dynamically find all COLORMAP_ constants in the cv2 library
-        self.available_maps = {
-            name.replace("COLORMAP_", "").capitalize(): getattr(cv2, name)
-            for name in dir(cv2) if name.startswith("COLORMAP_")
-        }
-        # Set a default starting map
-        self.current_map_id = cv2.COLORMAP_JET
+        self.mode = 'preset' # or 'custom'
+        self.preset_name = 'terrain'
+        self.custom_stops = []
+        self.lut = np.zeros((256, 3), dtype=np.uint8)
+        self.rebuild_lut()
 
-    def get_names(self):
-        """Returns a list of human-readable names for the GUI combo box."""
-        return list(self.available_maps.keys())
+    def set_mode_preset(self, name):
+        self.mode = 'preset'
+        self.preset_name = name
+        self.rebuild_lut()
 
-    def set_map_by_name(self, name):
-        """Updates the internal ID based on the selection name."""
-        if name in self.available_maps:
-            self.current_map_id = self.available_maps[name]
+    def set_mode_custom(self, stops):
+        self.mode = 'custom'
+        self.custom_stops = sorted(stops, key=lambda x: x[0])
+        self.rebuild_lut()
 
-    def apply(self, elevation_8bit):
-        """
-        Applies the selected OpenCV colormap.
-        Input must be an 8-bit single-channel image (0-255).
-        """
-        return cv2.applyColorMap(elevation_8bit, self.current_map_id)
+    def rebuild_lut(self):
+        if self.mode == 'preset':
+            cmap = plt.get_cmap(self.preset_name)
+            gradient = cmap(np.arange(256))[:, :3]
+            self.lut = (gradient * 255).astype(np.uint8)[:, ::-1] # RGB->BGR
+            
+        elif self.mode == 'custom':
+            if not self.custom_stops: return
+            
+            keys = [int(s[0] * 255) for s in self.custom_stops]
+            b_vals = [s[1][0] for s in self.custom_stops]
+            g_vals = [s[1][1] for s in self.custom_stops]
+            r_vals = [s[1][2] for s in self.custom_stops]
+            
+            x = np.arange(256)
+            self.lut[:, 0] = np.interp(x, keys, b_vals)
+            self.lut[:, 1] = np.interp(x, keys, g_vals)
+            self.lut[:, 2] = np.interp(x, keys, r_vals)
 
-
-
-## Code to include slider to change colours to different heights - does not work well yet    
-    # def __init__(self):
-    #     # Elevation stops: (Elevation Value 0-255, BGR Color)
-    #     self.stops = [
-    #         {"val": 0,   "color": [128, 0, 0]},   # Deep Water
-    #         {"val": 40,  "color": [255, 0, 0]},   # Shallow Water
-    #         {"val": 60,  "color": [0, 255, 255]}, # Sand
-    #         {"val": 150, "color": [0, 128, 0]},   # Grass
-    #         {"val": 255, "color": [255, 255, 255]}# Peaks
-    #     ]
-    #     self.lut = self._rebuild_lut()
-
-    # def _rebuild_lut(self):
-    #     """Creates a 256x1 3-channel BGR LUT based on current stops."""
-    #     lut = np.zeros((256, 1, 3), dtype=np.uint8)
-    #     # Ensure stops are sorted by elevation value
-    #     sorted_stops = sorted(self.stops, key=lambda x: x['val'])
+    def apply(self, height_map, sea_offset=0.0):
+        # Apply sea level offset to indices
+        indices = (height_map * 255).astype(np.float32)
+        indices = indices - (sea_offset * 255)
+        indices = np.clip(indices, 0, 255).astype(np.uint8)
         
-    #     for i in range(len(sorted_stops) - 1):
-    #         s1, s2 = sorted_stops[i], sorted_stops[i+1]
-    #         idx1, idx2 = s1['val'], s2['val']
-    #         # Linear interpolation between two colors
-    #         for c in range(3): # B, G, R channels
-    #             lut[idx1:idx2, 0, c] = np.linspace(s1['color'][c], s2['color'][c], idx2 - idx1)
-    #     return lut
-
-    # def update_stop_value(self, index, new_val):
-    #     """Updates a specific stop's height and refreshes the LUT."""
-    #     self.stops[index]['val'] = np.clip(new_val, 0, 255)
-    #     self.lut = self._rebuild_lut()
-
-    # def apply(self, elevation_8bit):
-    #     # Using cv2.LUT is extremely efficient for custom mapping
-    #     return cv2.LUT(cv2.merge([elevation_8bit]*3), self.lut)
+        return self.lut[indices]
