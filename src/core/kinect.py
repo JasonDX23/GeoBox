@@ -1,3 +1,7 @@
+import os
+current_folder = os.getcwd()
+os.add_dll_directory(current_folder)
+
 import freenect
 import numpy as np
 import sys
