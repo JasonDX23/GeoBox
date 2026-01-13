@@ -7,9 +7,9 @@ class DepthProcessor:
         self.max_d = max_depth
         self.accumulated = None 
         
-        # INCREASED SPEED: 0.8 means "80% New Data, 20% Old Data"
+        # INCREASED SPEED: 0.3 means "30% New Data, 70% Old Data"
         # This removes the "Ghost Hand" trail much faster.
-        self.history_alpha = 0.8 
+        self.history_alpha = 0.3 # TEST 
     
     def auto_range(self, depth_frame):
         safe_depth = np.nan_to_num(depth_frame, nan=0.0, posinf=0.0, neginf=0.0)

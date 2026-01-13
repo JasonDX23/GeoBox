@@ -1,12 +1,12 @@
 import sys
-import threading
 import time
+import traceback
 import numpy as np
 import cv2
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Signal, QObject
+from PySide6.QtCore import QThread, Signal, QObject
 
-# Modules
+# --- Custom Modules ---
 from core.kinect import KinectDevice
 from core.calibration import ProjectorCalibrator
 from core.processor import DepthProcessor
@@ -16,22 +16,23 @@ from modules.fluid_sim import FluidSimulator
 from ui.window import RenderWindow
 from ui.dashboard import GeoBoxDashboard
 
-class EngineSignals(QObject):
-    frame_ready = Signal(np.ndarray)
-    range_auto_set = Signal(int, int)
+class GeoBoxEngine(QThread):
+    """
+    The Core Physics & Rendering Engine.
+    Runs on a separate thread to keep the GUI responsive.
+    """
+    frame_ready = Signal(np.ndarray)      # Sends final image to Dashboard
+    range_auto_set = Signal(int, int)     # Updates UI sliders after auto-level
 
-class GeoBoxEngine(threading.Thread):
-    def __init__(self, signals, dash_signals):
+    def __init__(self, dash_signals):
         super().__init__()
-        self.daemon = True
-        self.running = False
-        self.signals = signals
-        
-        # Load Config
+        self.setTerminationEnabled(True)
+
+        # 1. Load Configuration
         self.config_mgr = ConfigManager()
         self.conf_data = self.config_mgr.load()
-        
-        # Initialize Core Modules
+
+        # 2. Initialize Logic Modules
         self.calibrator = ProjectorCalibrator()
         self.calibrator.set_config(self.conf_data["roi"], self.conf_data["matrix"])
         
@@ -40,28 +41,29 @@ class GeoBoxEngine(threading.Thread):
             max_depth=self.conf_data["depth_range"][1]
         )
         self.mapper = HybridColorMapper()
+        self.mapper.load_cpt_file("HeightColorMap.cpt")
         self.fluids = FluidSimulator()
-        
-        # State Flags
+
+        # 3. Internal State
+        self.running = False
         self.mode = "RUN"
         self.wizard_step = 0
         self.calib_trigger = False
         self.flash_timer = 0
-        self.flash_type = 1 # 1=Green, -1=Red
+        self.flash_type = 1 
         self.perform_auto_level = False
         
-        # Visual Settings
+        # Visual/Simulation Parameters
         self.sea_offset = 0.0
         self.contours_on = False
         self.contour_int = 0.05
         self.flip_orientation = False 
-        
-        # Scaling State
         self.output_scale_x = 1.0
         self.output_scale_y = 1.0
         self.calculate_scaling() 
-        
-        # Signal Connections
+
+        # 4. Wire Dashboard Inputs -> Engine Slots
+        # Note: We do NOT connect roi_selected here anymore (moved to main)
         dash_signals.sea_changed.connect(self.set_sea)
         dash_signals.flip_changed.connect(self.set_flip) 
         dash_signals.mode_preset.connect(self.set_preset)
@@ -78,7 +80,7 @@ class GeoBoxEngine(threading.Thread):
         dash_signals.calib_next.connect(self.wiz_next)
         dash_signals.calib_finish.connect(self.wiz_finish)
 
-    # --- Slots ---
+    # --- SETTERS / SLOTS ---
     def set_sea(self, v): self.sea_offset = v
     def set_flip(self, b): self.flip_orientation = b
     def set_preset(self, n): self.mapper.set_mode_preset(n)
@@ -112,123 +114,133 @@ class GeoBoxEngine(threading.Thread):
         self.output_scale_x = 640.0 / float(rw)
         self.output_scale_y = 480.0 / float(rh)
 
-    # --- Main Loop ---
+    # --- WORKER LOOP ---
     def run(self):
-        print("[Engine] GeoBox Kernel Started.")
-        kinect = None
-        try: kinect = KinectDevice()
-        except: return
-
-        proj_win = RenderWindow("GeoBox Projector")
-        self.running = True
+        print("[Engine] GeoBox Kernel Starting...")
         
+        kinect = None
+        proj_win = None
+        
+        try:
+            import freenect 
+            kinect = KinectDevice()
+            print("[Engine] Kinect Hardware Connected.")
+        except Exception as e:
+            print(f"[CRITICAL] Kinect Init Failed: {e}")
+            traceback.print_exc()
+            return 
+
+        try:
+            proj_win = RenderWindow("GeoBox Projector")
+        except Exception as e:
+            print(f"[CRITICAL] Window Init Failed: {e}")
+            if kinect: kinect.close()
+            return
+
+        self.running = True
+
         while self.running:
             try:
-                # 1. ACQUIRE
+                # --- A. DATA ACQUISITION ---
                 d_raw = kinect.get_depth_frame()
-                if d_raw is None: 
-                    time.sleep(0.01)
+                if d_raw is None:
+                    self.msleep(5) 
                     continue
 
-                # --- MODE: CALIBRATION WIZARD ---
+                dashboard_viz = None 
+
+                # --- B. MODE SWITCHING ---
+                
+                # [MODE 1] CALIBRATION WIZARD
                 if self.mode == "CALIB_WIZARD":
                     rgb = kinect.get_rgb_frame()
-                    if rgb is None: continue
-                    
-                    pat = self.calibrator.generate_dynamic_pattern(self.wizard_step)
-                    phase = "SAND" if self.wizard_step < 5 else "BOARD"
-                    # msg = f"STEP {self.wizard_step+1}/10 - {phase}"
-                    # cv2.putText(pat, msg, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-                    
-                    # Flash Feedback
-                    if self.flash_timer > 0:
-                        overlay = np.zeros_like(pat)
-                        color = (0, 255, 0) if self.flash_type == 1 else (0, 0, 255)
-                        overlay[:,:] = color
-                        pat = cv2.addWeighted(pat, 0.7, overlay, 0.3, 0)
-                        self.flash_timer -= 1
-                    
-                    proj_win.show(pat)
-                    
-                    if self.calib_trigger:
-                        # Pass step_idx so calibrator knows if we are in "Blind Board" phase
-                        success, viz = self.calibrator.capture_frame(rgb, d_raw, self.wizard_step)
-                        self.signals.frame_ready.emit(viz)
-                        if success:
-                            self.wizard_step += 1
-                            self.calib_trigger = False
-                            self.flash_timer = 10
-                            self.flash_type = 1 # Green
-                            if self.wizard_step >= 10: self.mode = "CALIB_WAIT"
+                    if rgb is not None:
+                        pat = self.calibrator.generate_dynamic_pattern(self.wizard_step)
+                        
+                        if self.flash_timer > 0:
+                            overlay = np.zeros_like(pat)
+                            color = (0, 255, 0) if self.flash_type == 1 else (0, 0, 255)
+                            overlay[:] = color
+                            pat = cv2.addWeighted(pat, 0.7, overlay, 0.3, 0)
+                            self.flash_timer -= 1
+                        
+                        proj_win.show(pat)
+                        
+                        if self.calib_trigger:
+                            success, viz = self.calibrator.capture_frame(rgb, d_raw, self.wizard_step)
+                            dashboard_viz = viz
+                            if success:
+                                self.wizard_step += 1
+                                self.calib_trigger = False
+                                self.flash_timer = 10
+                                self.flash_type = 1 
+                                if self.wizard_step >= 10: self.mode = "CALIB_WAIT"
+                            else:
+                                self.calib_trigger = False
+                                self.flash_timer = 10
+                                self.flash_type = -1 
                         else:
-                             self.calib_trigger = False
-                             self.flash_timer = 10
-                             self.flash_type = -1 # Red
-                    else:
-                        self.signals.frame_ready.emit(rgb)
+                            dashboard_viz = rgb
 
-                # --- MODE: WAIT FOR COMPUTE ---
+                # [MODE 2] WAIT FOR COMPUTE
                 elif self.mode == "CALIB_WAIT":
                     img = np.zeros((480,640,3), dtype=np.uint8)
                     cv2.putText(img, "DONE - CLICK COMPUTE", (50,240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
                     proj_win.show(img)
-                    if kinect.get_rgb_frame() is not None:
-                        self.signals.frame_ready.emit(kinect.get_rgb_frame())
+                    rgb = kinect.get_rgb_frame()
+                    if rgb is not None: dashboard_viz = rgb
 
-                # --- MODE: ROI SELECTION ---
+                # [MODE 3] ROI SELECTION
                 elif self.mode == "ROI":
                     viz = (d_raw / 2048.0 * 255).astype(np.uint8)
-                    viz_color = cv2.applyColorMap(viz, cv2.COLORMAP_JET)
+                    dashboard_viz = cv2.applyColorMap(viz, cv2.COLORMAP_JET)
                     proj_win.show(np.zeros((480, 640, 3), dtype=np.uint8))
-                    self.signals.frame_ready.emit(viz_color)
 
-                # --- MODE: RUN SIMULATION ---
+                # [MODE 4] RUN SIMULATION (Main Loop)
                 elif self.mode == "RUN":
-                    # 1. Hard ROI Crop (Delete outside noise)
+                    # 1. Hard ROI Crop
                     rx, ry, rw, rh = self.calibrator.roi
                     masked_raw = np.ones_like(d_raw) * 2047 
                     rx, ry = max(0, rx), max(0, ry)
                     rw, rh = min(rw, 640-rx), min(rh, 480-ry)
+                    
                     if rw > 0 and rh > 0:
                         masked_raw[ry:ry+rh, rx:rx+rw] = d_raw[ry:ry+rh, rx:rx+rw]
 
-                    # 2. Calibration Warp (Rectify Image)
+                    # 2. Calibration Warp
                     warped = self.calibrator.warp(masked_raw)
                     if self.flip_orientation: warped = cv2.flip(warped, -1)
                     
-                    # 3. Post-Scale (Zoom to fill screen)
+                    # 3. Post-Scale 
                     warped_cropped = warped[ry:ry+rh, rx:rx+rw]
                     if warped_cropped.size == 0: continue
+                    
                     warped_scaled = cv2.resize(warped_cropped, (640, 480), interpolation=cv2.INTER_LINEAR)
                     
-                    # 4. Auto Level (Adjust Colors)
+                    # 4. Auto Level
                     if self.perform_auto_level:
                         mn, mx = self.processor.auto_range(warped_scaled)
                         self.processor.min_d, self.processor.max_d = mn, mx
-                        self.signals.range_auto_set.emit(mn, mx)
+                        self.range_auto_set.emit(mn, mx)
                         self.perform_auto_level = False
                     
-                    # 5. Hand Rain Interaction
-                    # We use warped_scaled to detect hand positions relative to sand
-                    self.fluids.apply_hands(warped_scaled, sand_min_threshold=self.processor.min_d - 50)
+                    # 5. [REMOVED] Hand Fluid Interaction
+                    # self.fluids.apply_hands(...) removed per request
 
-                    # 6. Generate Height Maps
-                    # A. Visuals: Includes hands (for rendering)
+                    # 6. Height Map Generation
                     vis_height = self.processor.normalize(warped_scaled)
-                    
-                    # B. Physics: Hands Removed (so water falls through)
                     phys_height = self.processor.normalize_for_physics(warped_scaled)
                     
-                    # 7. Simulation Step (Uses Physics Map)
+                    # 7. Physics Step
                     fluid = self.fluids.step(phys_height)
                     
-                    # 8. Rendering (Uses Visual Map)
+                    # 8. Rendering
                     frame = self.mapper.apply(vis_height, self.sea_offset)
                     
                     # Overlay Fluid
                     if np.any(fluid > 0.01):
-                        wc = np.full_like(frame, [200, 100, 0])
-                        alpha = np.dstack([np.clip(fluid*4,0,0.7)]*3)
+                        wc = np.full_like(frame, [200, 100, 0]) 
+                        alpha = np.dstack([np.clip(fluid*4, 0, 0.7)]*3)
                         frame = (frame*(1-alpha) + wc*alpha).astype(np.uint8)
                     
                     # Overlay Contours
@@ -244,35 +256,48 @@ class GeoBoxEngine(threading.Thread):
                         h_in, w_in = warped_scaled.shape
                         val = warped_scaled[h_in//2, w_in//2]
                         depth_mm = int(val) if np.isfinite(val) else 0
-                        hud_text = f"REAL: {depth_mm}mm | MIN: {self.processor.min_d} | MAX: {self.processor.max_d}"
+                        hud_text = f"Z: {depth_mm}mm | [{self.processor.min_d}:{self.processor.max_d}]"
                         cv2.putText(frame, hud_text, (20, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                     except: pass
 
                     proj_win.show(frame)
-                    self.signals.frame_ready.emit(frame)
+                    dashboard_viz = frame
+
+                # --- C. UPDATE UI ---
+                if dashboard_viz is not None:
+                    self.frame_ready.emit(dashboard_viz)
+
+                # --- D. WINDOW EVENTS ---
+                if not proj_win.process_input():
+                    self.running = False
 
             except Exception as e:
-                # print(e) # Suppress loop errors for stability
-                continue
-            
-            if not proj_win.process_input(): self.running = False
+                print(f"[Loop Error] {e}")
+                traceback.print_exc()
+                self.msleep(100) 
 
         if kinect: kinect.close()
-        proj_win.destroy()
+        if proj_win: proj_win.destroy()
+        print("[Engine] GeoBox Kernel Stopped.")
 
 def main():
     app = QApplication(sys.argv)
-    dash = GeoBoxDashboard()
-    eng_signals = EngineSignals()
-    engine = GeoBoxEngine(eng_signals, dash.signals)
     
-    # Connect Dashboard <-> Engine
-    dash.video.roi_selected.connect(engine.update_roi)
-    eng_signals.frame_ready.connect(dash.update_feed)
-    eng_signals.range_auto_set.connect(dash.set_depth_sliders)
+    dash = GeoBoxDashboard()
+    engine = GeoBoxEngine(dash.signals)
+    
+    engine.frame_ready.connect(dash.update_feed)
+    engine.range_auto_set.connect(dash.set_depth_sliders)
+
+    # FIX: Connect ROI selection signal here, where dash.video is accessible
+    if hasattr(dash, 'video'):
+         dash.video.roi_selected.connect(engine.update_roi)
+    else:
+         print("[WARNING] dash.video not found. ROI selection may not work.")
     
     dash.show()
-    engine.start()
+    engine.start() 
+    
     sys.exit(app.exec())
 
 if __name__ == "__main__":
