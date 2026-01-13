@@ -6,8 +6,8 @@ class RenderWindow:
     def __init__(self, name="GeoBox Projector"):
         self.name = name
         self.screen_rect = None
-        self.native_w = 640
-        self.native_h = 480
+        self.native_w = 1024    
+        self.native_h = 768
         
         app = QGuiApplication.instance()
         screens = app.screens()
@@ -23,8 +23,8 @@ class RenderWindow:
             geom = screens[0].geometry()
             self.screen_rect = (geom.x(), geom.y())
             # For primary screen debugging, keep standard size
-            self.native_w = 640
-            self.native_h = 480
+            self.native_w = 1024
+            self.native_h = 768
 
         # 2. Setup Window
         cv2.namedWindow(self.name, cv2.WINDOW_NORMAL)

@@ -108,6 +108,6 @@ class DepthProcessor:
             thresh = np.zeros_like(big_h, dtype=np.uint8)
             thresh[big_h > level] = 255
             cnts, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(viz, cnts, -1, (0,0,0,255), 4) 
+            cv2.drawContours(viz, cnts, -1, (0,0,0,255), 1) 
             
         return cv2.resize(viz, (w, h), interpolation=cv2.INTER_AREA)
