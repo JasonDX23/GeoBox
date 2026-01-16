@@ -2,14 +2,14 @@ import numpy as np
 import cv2
 
 class DepthProcessor:
-    def __init__(self, min_depth=600, max_depth=1100):
+    def __init__(self, min_depth=254, max_depth=1100):
         self.min_d = min_depth
         self.max_d = max_depth
         self.accumulated = None 
         
         # INCREASED SPEED: 0.3 means "30% New Data, 70% Old Data"
         # This removes the "Ghost Hand" trail much faster.
-        self.history_alpha = 0.3 # TEST 
+        self.history_alpha = 0.2 # TEST 
     
     def auto_range(self, depth_frame):
         safe_depth = np.nan_to_num(depth_frame, nan=0.0, posinf=0.0, neginf=0.0)

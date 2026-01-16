@@ -63,7 +63,6 @@ class GeoBoxEngine(QThread):
         self.calculate_scaling() 
 
         # 4. Wire Dashboard Inputs -> Engine Slots
-        # Note: We do NOT connect roi_selected here anymore (moved to main)
         dash_signals.sea_changed.connect(self.set_sea)
         dash_signals.flip_changed.connect(self.set_flip) 
         dash_signals.mode_preset.connect(self.set_preset)
@@ -114,6 +113,19 @@ class GeoBoxEngine(QThread):
         self.output_scale_x = 640.0 / float(rw)
         self.output_scale_y = 480.0 / float(rh)
 
+    # --- MOUSE INTERACTION ---
+    def mouse_callback(self, event, x, y, flags, param):
+        """
+        Catches mouse clicks on the projector window 
+        and updates the fluid simulator's cursor.
+        """
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.fluids.set_interaction_point(x, y, True)
+        elif event == cv2.EVENT_MOUSEMOVE and (flags & cv2.EVENT_FLAG_LBUTTON):
+            self.fluids.set_interaction_point(x, y, True)
+        elif event == cv2.EVENT_LBUTTONUP:
+            self.fluids.set_interaction_point(x, y, False)
+
     # --- WORKER LOOP ---
     def run(self):
         print("[Engine] GeoBox Kernel Starting...")
@@ -132,6 +144,12 @@ class GeoBoxEngine(QThread):
 
         try:
             proj_win = RenderWindow("GeoBox Projector")
+            
+            # --- NEW: Enable Mouse Interaction ---
+            # Create window immediately to attach callback
+            cv2.namedWindow("GeoBox Projector", cv2.WINDOW_NORMAL)
+            cv2.setMouseCallback("GeoBox Projector", self.mouse_callback)
+            
         except Exception as e:
             print(f"[CRITICAL] Window Init Failed: {e}")
             if kinect: kinect.close()
@@ -224,24 +242,26 @@ class GeoBoxEngine(QThread):
                         self.range_auto_set.emit(mn, mx)
                         self.perform_auto_level = False
                     
-                    # 5. [REMOVED] Hand Fluid Interaction
-                    # self.fluids.apply_hands(...) removed per request
-
                     # 6. Height Map Generation
                     vis_height = self.processor.normalize(warped_scaled)
                     phys_height = self.processor.normalize_for_physics(warped_scaled)
                     
-                    # 7. Physics Step
-                    fluid = self.fluids.step(phys_height)
+                    # 7. Physics Step (Returns Electric Blue Image)
+                    fluid_visual = self.fluids.step(phys_height)
                     
                     # 8. Rendering
                     frame = self.mapper.apply(vis_height, self.sea_offset)
                     
-                    # Overlay Fluid
-                    if np.any(fluid > 0.01):
-                        wc = np.full_like(frame, [200, 100, 0]) 
-                        alpha = np.dstack([np.clip(fluid*4, 0, 0.7)]*3)
-                        frame = (frame*(1-alpha) + wc*alpha).astype(np.uint8)
+                    # 9. Overlay Fluid
+                    if np.any(fluid_visual > 0):
+                        # Create an alpha mask based on water brightness
+                        water_gray = cv2.cvtColor(fluid_visual, cv2.COLOR_BGR2GRAY)
+                        # Cap opacity at 80% to ensure sand is visible under water
+                        alpha = np.clip(water_gray / 100.0, 0, 0.8)
+                        alpha = alpha[:, :, np.newaxis] 
+                        
+                        # Blend: Frame * (1-alpha) + Water * alpha
+                        frame = (frame * (1.0 - alpha) + fluid_visual * alpha).astype(np.uint8)
                     
                     # Overlay Contours
                     if self.contours_on:
@@ -256,8 +276,6 @@ class GeoBoxEngine(QThread):
                         h_in, w_in = warped_scaled.shape
                         val = warped_scaled[h_in//2, w_in//2]
                         depth_mm = int(val) if np.isfinite(val) else 0
-                        hud_text = f"Z: {depth_mm}mm | [{self.processor.min_d}:{self.processor.max_d}]"
-                        cv2.putText(frame, hud_text, (20, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                     except: pass
 
                     proj_win.show(frame)
@@ -289,7 +307,6 @@ def main():
     engine.frame_ready.connect(dash.update_feed)
     engine.range_auto_set.connect(dash.set_depth_sliders)
 
-    # FIX: Connect ROI selection signal here, where dash.video is accessible
     if hasattr(dash, 'video'):
          dash.video.roi_selected.connect(engine.update_roi)
     else:
