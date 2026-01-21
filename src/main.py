@@ -13,6 +13,9 @@ from core.processor import DepthProcessor
 from core.config import ConfigManager
 from modules.color_maps import HybridColorMapper
 from modules.fluid_sim import FluidSimulator
+# --- NEW: DEM Module ---
+from modules.dem_loader import DEMHandler
+# -----------------------
 from ui.window import RenderWindow
 from ui.dashboard import GeoBoxDashboard
 
@@ -43,6 +46,11 @@ class GeoBoxEngine(QThread):
         self.mapper = HybridColorMapper()
         self.mapper.load_cpt_file("HeightColorMap.cpt")
         self.fluids = FluidSimulator()
+        
+        # --- NEW: Initialize DEM Handler ---
+        self.dem_handler = DEMHandler(target_width=640, target_height=480)
+        self.current_phys_height = None  # Storage for saving 
+        # -----------------------------------
 
         # 3. Internal State
         self.running = False
@@ -78,6 +86,12 @@ class GeoBoxEngine(QThread):
         dash_signals.calib_start.connect(self.wiz_start)
         dash_signals.calib_next.connect(self.wiz_next)
         dash_signals.calib_finish.connect(self.wiz_finish)
+        
+        # --- NEW: Wire DEM Signals ---
+        dash_signals.dem_load_request.connect(self.load_dem_request)
+        dash_signals.dem_save_request.connect(self.save_dem_request)
+        dash_signals.dem_toggle.connect(self.toggle_dem)
+        # -----------------------------
 
     # --- SETTERS / SLOTS ---
     def set_sea(self, v): self.sea_offset = v
@@ -94,6 +108,26 @@ class GeoBoxEngine(QThread):
     def wiz_start(self): self.calibrator.reset_collection(); self.wizard_step = 0; self.mode = "CALIB_WIZARD"
     def wiz_next(self): self.calib_trigger = True
     def trigger_auto(self): self.perform_auto_level = True
+
+    # --- NEW: DEM Slots ---
+    def load_dem_request(self, filepath):
+        # Pass current depth range so the loaded image scales correctly to the sandbox
+        min_d = self.processor.min_d
+        max_d = self.processor.max_d
+        self.dem_handler.load_dem(filepath, min_d, max_d)
+
+    def save_dem_request(self, filepath):
+        print(f"[Engine] Saving DEM to {filepath}...")
+        # Use the cached physics height map from the last frame
+        if self.current_phys_height is not None:
+             success = self.dem_handler.save_dem(filepath, self.current_phys_height)
+             if not success: print("[Engine] Save Failed.")
+        else:
+             print("[Engine] Cannot save: No terrain data available yet.")
+
+    def toggle_dem(self, active):
+        self.dem_handler.active = active
+    # ----------------------
 
     def update_roi(self, roi): 
         self.calibrator.roi = roi
@@ -134,7 +168,8 @@ class GeoBoxEngine(QThread):
         proj_win = None
         
         try:
-            import freenect 
+            # Import freenect here to avoid crashing if library is missing during UI init
+            from core.kinect import KinectDevice
             kinect = KinectDevice()
             print("[Engine] Kinect Hardware Connected.")
         except Exception as e:
@@ -145,8 +180,7 @@ class GeoBoxEngine(QThread):
         try:
             proj_win = RenderWindow("GeoBox Projector")
             
-            # --- NEW: Enable Mouse Interaction ---
-            # Create window immediately to attach callback
+            # Enable Mouse Interaction
             cv2.namedWindow("GeoBox Projector", cv2.WINDOW_NORMAL)
             cv2.setMouseCallback("GeoBox Projector", self.mouse_callback)
             
@@ -246,11 +280,24 @@ class GeoBoxEngine(QThread):
                     vis_height = self.processor.normalize(warped_scaled)
                     phys_height = self.processor.normalize_for_physics(warped_scaled)
                     
-                    # 7. Physics Step (Returns Electric Blue Image)
+                    # --- NEW: Store for saving later ---
+                    self.current_phys_height = phys_height
+                    # -----------------------------------
+                    
+                    # 7. Physics Step
                     fluid_visual = self.fluids.step(phys_height)
                     
                     # 8. Rendering
                     frame = self.mapper.apply(vis_height, self.sea_offset)
+                    
+                    # --- NEW: DEM Guidance Overlay ---
+                    if self.dem_handler.active:
+                        # Compare physical height to loaded DEM
+                        guidance_layer = self.dem_handler.compute_guidance_layer(phys_height)
+                        if guidance_layer is not None:
+                             # Blend overlay (0.6 original + 0.4 overlay)
+                             frame = cv2.addWeighted(frame, 0.6, guidance_layer, 0.4, 0)
+                    # ---------------------------------
                     
                     # 9. Overlay Fluid
                     if np.any(fluid_visual > 0):

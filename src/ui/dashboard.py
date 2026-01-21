@@ -3,12 +3,15 @@ import numpy as np
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGroupBox, QLabel, QSlider, QComboBox, QCheckBox, QPushButton,
-    QTabWidget, QSizePolicy
+    QTabWidget, QSizePolicy, QFileDialog
 )
 from PySide6.QtCore import Qt, Signal, Slot, QRect, QPoint, QSize
 from PySide6.QtGui import QImage, QPainter, QPen, QColor
 
 class VideoWidget(QWidget):
+    """
+    Widget to display the Kinect feed and handle ROI selection drawing.
+    """
     roi_selected = Signal(list) 
 
     def __init__(self):
@@ -36,16 +39,21 @@ class VideoWidget(QWidget):
         painter = QPainter(self)
         if self.image:
             w, h = self.width(), self.height()
+            # Scale image to fit widget while maintaining aspect ratio
             scaled = self.image.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            
+            # Calculate offsets to center the image
             self.off_x = (w - scaled.width()) // 2
             self.off_y = (h - scaled.height()) // 2
             self.scale_w = scaled.width()
             self.scale_h = scaled.height()
+            
             painter.drawImage(self.off_x, self.off_y, scaled)
         else:
             painter.setPen(Qt.white)
             painter.drawText(self.rect(), Qt.AlignCenter, "Awaiting Kinect Stream...")
 
+        # Draw ROI selection rectangle
         if self.is_dragging and not self.current_rect.isNull():
             painter.setPen(self.pen)
             painter.drawRect(self.current_rect)
@@ -68,6 +76,7 @@ class VideoWidget(QWidget):
             self.drawing_active = False 
             self.setCursor(Qt.ArrowCursor)
             
+            # Map widget coordinates back to source image coordinates (640x480)
             if self.image:
                 rx = self.current_rect.x() - getattr(self, 'off_x', 0)
                 ry = self.current_rect.y() - getattr(self, 'off_y', 0)
@@ -92,24 +101,33 @@ class VideoWidget(QWidget):
 
 class GeoBoxDashboard(QMainWindow):
     class Signals(QWidget):
+        # Global Geometry
         sea_changed = Signal(float)
         flip_changed = Signal(bool)
+        
+        # Visuals
         mode_preset = Signal(str)
         mode_custom = Signal(list)
         contours_toggled = Signal(bool)
         contour_interval = Signal(float)
         depth_range_update = Signal(int, int)
-        
-        # --- NEW: Auto Contrast Signal ---
         trigger_auto_level = Signal() 
 
+        # Fluids
         rain_changed = Signal(bool, float)
         evap_changed = Signal(float)
         clear_water = Signal()
+        
+        # Calibration
         start_roi_select = Signal()
         calib_start = Signal()
         calib_next = Signal()
         calib_finish = Signal()
+
+        # Reference (DEM)
+        dem_load_request = Signal(str)
+        dem_save_request = Signal(str)
+        dem_toggle = Signal(bool)
 
     def __init__(self):
         super().__init__()
@@ -121,27 +139,35 @@ class GeoBoxDashboard(QMainWindow):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QHBoxLayout(main_widget)
+        
+        # --- Sidebar ---
         sidebar = QWidget()
         sidebar.setFixedWidth(320)
         side_layout = QVBoxLayout(sidebar)
         
+        # 1. Global Controls (Always visible)
         gb_global = QGroupBox("Global Geometry")
         l_global = QVBoxLayout()
+        
         self.sea_slider = QSlider(Qt.Horizontal)
         self.sea_slider.setRange(-50, 50)
         self.sea_slider.valueChanged.connect(lambda v: self.signals.sea_changed.emit(v/100.0))
         l_global.addWidget(QLabel("Sea Level Offset"))
         l_global.addWidget(self.sea_slider)
+        
         self.chk_flip = QCheckBox("Invert Orientation (Fix Flip)")
         self.chk_flip.toggled.connect(self.signals.flip_changed.emit)
         l_global.addWidget(self.chk_flip)
         gb_global.setLayout(l_global)
         
+        # 2. Tabs
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("QTabWidget::pane { border: 1px solid #555; }")
 
+        # --- TAB: VISUALS ---
         t_vis = QWidget()
         l_vis = QVBoxLayout()
+        
         l_vis.addWidget(QLabel("Color Theme:"))
         self.combo = QComboBox()
         self.combo.addItems(['terrain', 'ocean', 'gist_earth', 'viridis', 'magma'])
@@ -154,6 +180,7 @@ class GeoBoxDashboard(QMainWindow):
         self.sld_min = QSlider(Qt.Horizontal)
         self.sld_min.setRange(400, 1500)
         self.sld_min.setValue(800)
+        
         self.lbl_max = QLabel("Highest Point (Mountain): 950mm")
         self.sld_max = QSlider(Qt.Horizontal)
         self.sld_max.setRange(400, 1500)
@@ -167,7 +194,7 @@ class GeoBoxDashboard(QMainWindow):
         ld.addWidget(self.lbl_max)
         ld.addWidget(self.sld_max)
         
-        # --- NEW: Auto Level Button ---
+        # Auto Level Button
         btn_auto = QPushButton("Auto-Level Contrast (Scan Sand)")
         btn_auto.setStyleSheet("background-color: #0066cc; color: white; padding: 5px;")
         btn_auto.clicked.connect(self.signals.trigger_auto_level.emit)
@@ -182,6 +209,7 @@ class GeoBoxDashboard(QMainWindow):
         self.btn_cont.setCheckable(True)
         self.btn_cont.toggled.connect(self.signals.contours_toggled.emit)
         lc.addWidget(self.btn_cont)
+        
         self.slider_cont = QSlider(Qt.Horizontal)
         self.slider_cont.setRange(2, 20)
         self.slider_cont.setValue(5)
@@ -192,45 +220,87 @@ class GeoBoxDashboard(QMainWindow):
         l_vis.addStretch()
         t_vis.setLayout(l_vis)
         
+        # --- TAB: FLUIDS ---
         t_fluid = QWidget()
         l_fluid = QVBoxLayout()
         self.chk_rain = QCheckBox("Enable Rainfall")
         self.chk_rain.toggled.connect(self._update_rain)
         l_fluid.addWidget(self.chk_rain)
+        
         l_fluid.addWidget(QLabel("Rain Intensity:"))
         self.sld_rain = QSlider(Qt.Horizontal)
         self.sld_rain.setRange(1, 50)
         self.sld_rain.setValue(10)
         self.sld_rain.valueChanged.connect(self._update_rain)
         l_fluid.addWidget(self.sld_rain)
+        
         l_fluid.addWidget(QLabel("Evaporation Rate:"))
         self.sld_evap = QSlider(Qt.Horizontal)
         self.sld_evap.setRange(0, 50)
         self.sld_evap.setValue(1)
         self.sld_evap.valueChanged.connect(lambda v: self.signals.evap_changed.emit(v/1000.0))
         l_fluid.addWidget(self.sld_evap)
+        
         btn_clear = QPushButton("Drain System")
         btn_clear.clicked.connect(self.signals.clear_water.emit)
         l_fluid.addWidget(btn_clear)
         l_fluid.addStretch()
         t_fluid.setLayout(l_fluid)
 
+        # --- TAB: REFERENCE (DEM) ---
+        t_dem = QWidget()
+        l_dem = QVBoxLayout()
+        
+        gb_io = QGroupBox("Save/Load Topography")
+        l_io = QVBoxLayout()
+        
+        btn_load = QPushButton("Load Reference Model (DEM)")
+        btn_load.clicked.connect(self.open_load_dialog)
+        l_io.addWidget(btn_load)
+        
+        btn_save = QPushButton("Save Current Sand as DEM")
+        btn_save.clicked.connect(self.open_save_dialog)
+        l_io.addWidget(btn_save)
+        
+        gb_io.setLayout(l_io)
+        l_dem.addWidget(gb_io)
+
+        gb_guidance = QGroupBox("Guidance Overlay")
+        l_guide = QVBoxLayout()
+        self.chk_dem = QCheckBox("Show Difference Overlay")
+        self.chk_dem.setStyleSheet("font-weight: bold; color: #8f8;")
+        self.chk_dem.toggled.connect(self.signals.dem_toggle.emit)
+        l_guide.addWidget(self.chk_dem)
+        
+        lbl_guide = QLabel("Green = Match\nRed = Dig Deeper\nBlue = Fill Sand")
+        lbl_guide.setStyleSheet("color: #aaa; font-size: 11px;")
+        l_guide.addWidget(lbl_guide)
+        
+        gb_guidance.setLayout(l_guide)
+        l_dem.addWidget(gb_guidance)
+        l_dem.addStretch()
+        t_dem.setLayout(l_dem)
+
+        # --- TAB: CALIBRATION ---
         t_calib = QWidget()
         l_calib = QVBoxLayout()
         l_calib.addWidget(QLabel("<b>Step 1: ROI</b>"))
         btn_roi = QPushButton("Draw Sand Box")
         btn_roi.clicked.connect(self.activate_drawing)
         l_calib.addWidget(btn_roi)
+        
         l_calib.addWidget(QLabel("<b>Step 2: 10-Step Wizard</b>"))
         l_calib.addWidget(QLabel("Phase 1: Flat Sand (5 Steps)\nPhase 2: Board on Top (5 Steps)"))
         self.btn_start = QPushButton("Start Wizard")
         self.btn_start.setStyleSheet("background-color: #005; font-weight: bold;")
         self.btn_start.clicked.connect(self.signals.calib_start.emit)
         l_calib.addWidget(self.btn_start)
+        
         self.btn_next = QPushButton("Capture & Next")
         self.btn_next.setStyleSheet("background-color: #050; font-weight: bold; height: 30px;")
         self.btn_next.clicked.connect(self.signals.calib_next.emit)
         l_calib.addWidget(self.btn_next)
+        
         l_calib.addWidget(QLabel("<b>Step 3: Finish</b>"))
         btn_save = QPushButton("Compute & Save")
         btn_save.clicked.connect(self.signals.calib_finish.emit)
@@ -238,13 +308,16 @@ class GeoBoxDashboard(QMainWindow):
         l_calib.addStretch()
         t_calib.setLayout(l_calib)
 
+        # Add tabs
         self.tabs.addTab(t_vis, "Visuals")
         self.tabs.addTab(t_fluid, "Fluids")
+        self.tabs.addTab(t_dem, "Reference")
         self.tabs.addTab(t_calib, "Calibration")
 
         side_layout.addWidget(gb_global)
         side_layout.addWidget(self.tabs)
         side_layout.addStretch()
+        
         self.video = VideoWidget()
         layout.addWidget(sidebar)
         layout.addWidget(self.video, stretch=1)
@@ -261,25 +334,44 @@ class GeoBoxDashboard(QMainWindow):
     def _update_depth(self):
         mn = self.sld_min.value()
         mx = self.sld_max.value()
+        # Enforce minimum separation
         if mn >= mx - 50:
              mn = mx - 50
              self.sld_min.setValue(mn)
         self.lbl_min.setText(f"Lowest Point (Water): {mn}mm")
         self.lbl_max.setText(f"Highest Point (Mountain): {mx}mm")
         self.signals.depth_range_update.emit(mn, mx)
+    
+    # --- File Dialog Helpers ---
+    # Find these functions in your GeoBoxDashboard class and update the filter strings
 
-    # --- NEW: Slot to receive Auto-Level updates from Engine ---
+    def open_load_dialog(self):
+        # Allow loading .npy (Sandbox Data) and Images
+        fname, _ = QFileDialog.getOpenFileName(
+            self, "Load DEM", "", 
+            "Sandbox Data (*.npy);;Images (*.png *.tif *.tiff *.jpg)"
+        )
+        if fname:
+            self.signals.dem_load_request.emit(fname)
+
+    def open_save_dialog(self):
+        # Default to .npy for safety
+        fname, _ = QFileDialog.getSaveFileName(
+            self, "Save DEM", "sandbox_terrain.npy", 
+            "Sandbox Data (*.npy);;TIFF Export (*.tiff);;16-bit PNG (*.png)"
+        )
+        if fname:
+            self.signals.dem_save_request.emit(fname)
+            
     @Slot(int, int)
     def set_depth_sliders(self, mn, mx):
-        # Block signals to prevent feedback loop? No, valueChanged emits.
-        # We just set them.
         self.sld_min.blockSignals(True)
         self.sld_max.blockSignals(True)
         self.sld_min.setValue(mn)
         self.sld_max.setValue(mx)
         self.sld_min.blockSignals(False)
         self.sld_max.blockSignals(False)
-        self._update_depth() # Update labels and emit once
+        self._update_depth()
 
     @Slot(np.ndarray)
     def update_feed(self, frame):
@@ -293,3 +385,9 @@ class GeoBoxDashboard(QMainWindow):
             bpl = ch * w
         img = QImage(frame.data, w, h, bpl, fmt)
         self.video.set_frame(img.copy())
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = GeoBoxDashboard()
+    window.show()
+    sys.exit(app.exec())

@@ -5,13 +5,29 @@ class DepthProcessor:
     def __init__(self, min_depth=254, max_depth=1100):
         self.min_d = min_depth
         self.max_d = max_depth
-        self.accumulated = None 
         
-        # INCREASED SPEED: 0.3 means "30% New Data, 70% Old Data"
-        # This removes the "Ghost Hand" trail much faster.
-        self.history_alpha = 0.2 # TEST 
-    
+        # --- C++ PORT SETTINGS ---
+        # Corresponds to 'numAveragingSlots' in C++
+        # Higher = Smoother but more latency. 10-15 is a good balance.
+        self.history_len = 10 
+        
+        # Corresponds to 'maxVariance' in C++. 
+        # If a pixel varies more than this (std_dev), we define it as 'unstable'
+        self.stability_threshold = 8.0 
+        
+        # Corresponds to 'hysteresis'. 
+        # Even if stable, only update if value changes by at least this much.
+        self.hysteresis = 2.0
+        
+        # The Ring Buffer: Stores the last N frames of raw depth
+        self.frame_buffer = None
+        self.buffer_index = 0
+        
+        # The "Valid Buffer" (The last known good stable image)
+        self.last_stable_frame = None
+
     def auto_range(self, depth_frame):
+        # [Same as your original code]
         safe_depth = np.nan_to_num(depth_frame, nan=0.0, posinf=0.0, neginf=0.0)
         valid_pixels = safe_depth[(safe_depth > 400) & (safe_depth < 1500)]
         
@@ -30,25 +46,63 @@ class DepthProcessor:
         
         return new_min, new_max
 
-    def _prepare_frames(self, depth_frame):
-        """Shared preprocessing for both Visuals and Physics"""
-        # 0. NaN Guard
-        depth_frame = np.nan_to_num(depth_frame, nan=0.0)
+    def _process_statistical_filter(self, depth_frame):
+        """
+        Implements the C++ FrameFilter logic:
+        1. Store frame in ring buffer.
+        2. Calculate Mean and StdDev across the time axis.
+        3. Update output ONLY if pixel is stable (Low StdDev).
+        """
+        h, w = depth_frame.shape
         
-        # 1. Blur (Remove Quantization Lines)
-        clean_depth = cv2.GaussianBlur(depth_frame, (11, 11), 0)
+        # 1. Initialize Buffers if first run
+        if self.frame_buffer is None or self.frame_buffer.shape[1:] != (h, w):
+            self.frame_buffer = np.zeros((self.history_len, h, w), dtype=np.float32)
+            self.last_stable_frame = np.copy(depth_frame).astype(np.float32)
 
-        # 2. Temporal Smoothing
-        if self.accumulated is None:
-            self.accumulated = clean_depth
-        else:
-            cv2.accumulateWeighted(clean_depth, self.accumulated, self.history_alpha)
+        # 2. Add new frame to Ring Buffer (Replaces oldest frame)
+        # NaN handling: Replace NaNs with 0 or last known good value
+        clean_frame = np.nan_to_num(depth_frame, nan=0.0)
+        self.frame_buffer[self.buffer_index] = clean_frame
         
-        return self.accumulated
+        # Increment/Loop index
+        self.buffer_index = (self.buffer_index + 1) % self.history_len
+
+        # 3. Calculate Statistics (Vectorized)
+        # We calculate the Standard Deviation and Mean along axis 0 (Time)
+        # This replaces the 'statBuffer' and 'averagingBuffer' loops in C++
+        buffer_mean = np.mean(self.frame_buffer, axis=0)
+        buffer_std = np.std(self.frame_buffer, axis=0)
+
+        # 4. Stability Check (The Magic Step)
+        # C++: if(variance <= maxVariance)
+        is_stable = buffer_std < self.stability_threshold
+        
+        # 5. Hysteresis Check
+        # C++: if(abs(newFiltered - oldVal) >= hysteresis)
+        diff = np.abs(buffer_mean - self.last_stable_frame)
+        significant_change = diff > self.hysteresis
+
+        # 6. Determine Update Mask
+        # We update pixels that are STABLE AND have CHANGED SIGNIFICANTLY
+        update_mask = is_stable & significant_change
+
+        # 7. Update the Result
+        # Where update_mask is True, use new Mean.
+        # Where update_mask is False, keep self.last_stable_frame (Retain Valids)
+        self.last_stable_frame[update_mask] = buffer_mean[update_mask]
+        
+        # 8. Spatial Filter (Low-pass filter from C++)
+        # C++ performs a custom neighbor averaging. GaussianBlur is the OpenCV equivalent.
+        # We perform this on the STABLE result.
+        final_output = cv2.GaussianBlur(self.last_stable_frame, (5, 5), 0)
+        
+        return final_output
 
     def normalize(self, depth_frame):
         """Generates the VISUAL terrain (Includes Hands)"""
-        filtered = self._prepare_frames(depth_frame)
+        # Run the statistical filter instead of simple smooth
+        filtered = self._process_statistical_filter(depth_frame)
         
         # Clip & Normalize
         clipped = np.clip(filtered, self.min_d, self.max_d)
@@ -63,41 +117,37 @@ class DepthProcessor:
     def normalize_for_physics(self, depth_frame):
         """
         Generates the PHYSICS terrain (Removes Hands).
-        This ensures water falls THROUGH the hand, not OFF it.
         """
-        # We reuse the smoothed frame from _prepare_frames (accessed via self.accumulated)
-        # But for physics, we don't want to smooth the 'hand removal' too much, 
-        # so we operate on the current frame or the accumulated one.
-        # Let's use accumulated to keep it synced.
-        if self.accumulated is None: return self.normalize(depth_frame)
-        
-        phys_depth = self.accumulated.copy()
+        # Use the stable frame we calculated in normalize()
+        # If normalize() wasn't called yet, run the filter.
+        if self.last_stable_frame is None:
+            phys_depth = self._process_statistical_filter(depth_frame)
+        else:
+            phys_depth = self.last_stable_frame.copy()
         
         # 1. Detect Hands: Pixels closer than the 'min_depth' (Sand Peak)
-        # We add a buffer (e.g. 50mm) to distinguish 'High Sand' from 'Hand'
         hand_threshold = self.min_d - 30 
         is_hand = (phys_depth > 100) & (phys_depth < hand_threshold)
         
-        # 2. Erase Hands: Replace hand pixels with the "Average Sand Depth"
-        # This flattens the hand so it acts like open air/flat sand to the water.
-        # We find the median of the NON-HAND area to use as the fill value.
+        # 2. Erase Hands
         valid_sand = phys_depth[(phys_depth >= hand_threshold) & (phys_depth < self.max_d)]
         
         if len(valid_sand) > 0:
             fill_val = np.median(valid_sand)
         else:
-            fill_val = self.max_d # Default to floor if no sand seen
+            fill_val = self.max_d 
             
         phys_depth[is_hand] = fill_val
         
-        # 3. Standard Normalization on the "Erased" map
+        # 3. Normalize
         clipped = np.clip(phys_depth, self.min_d, self.max_d)
         range_diff = max(1, self.max_d - self.min_d)
         norm = (self.max_d - clipped) / range_diff
         
         return np.clip(norm, 0.0, 1.0)
 
-    def get_contour_layer(self, height_map, interval=0.05):
+    def get_contour_layer(self, height_map, interval=0.10):
+        # [Same as your original code]
         smooth_map = cv2.GaussianBlur(height_map, (15, 15), 0)
         h, w = height_map.shape
         big_h = cv2.resize(smooth_map, (w*2, h*2), interpolation=cv2.INTER_CUBIC)
@@ -108,6 +158,6 @@ class DepthProcessor:
             thresh = np.zeros_like(big_h, dtype=np.uint8)
             thresh[big_h > level] = 255
             cnts, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(viz, cnts, -1, (0,0,0,255), 1) 
+            cv2.drawContours(viz, cnts, -1, (255,255,255,255), 2)
             
         return cv2.resize(viz, (w, h), interpolation=cv2.INTER_AREA)
