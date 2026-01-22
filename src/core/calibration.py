@@ -45,14 +45,27 @@ class ProjectorCalibrator:
         self.collected_out = []
 
     def set_config(self, roi, matrix_list):
+        """
+        Loads calibration data. 
+        Handles migration from old 2x6 matrix to new 4x4 DLT matrix.
+        """
         self.roi = roi
-        mat = np.array(matrix_list, dtype=np.float32)
-        # Force resize to (2, 6) if an old config is loaded
-        if mat.shape != (2, 6):
-            self.matrix = np.zeros((2, 6), dtype=np.float32)
-            self.matrix[0, 0], self.matrix[1, 1] = 1.0, 1.0
-        else:
-            self.matrix = mat
+        
+        # Load matrix
+        try:
+            mat = np.array(matrix_list, dtype=np.float32)
+            
+            # If we load a valid 4x4 matrix, use it
+            if mat.shape == (4, 4):
+                self.proj_matrix = mat
+            else:
+                # If shape is wrong (e.g. old (2,6) config), reset to Default
+                print("Warning: Loaded config is incompatible (old format). Resetting to Identity.")
+                self.proj_matrix = np.eye(4, dtype=np.float32)
+                
+        except Exception as e:
+            print(f"Error loading config: {e}. Resetting to Identity.")
+            self.proj_matrix = np.eye(4, dtype=np.float32)
 
     def generate_dynamic_pattern(self, step_idx):
         """Draws target on projector window."""
