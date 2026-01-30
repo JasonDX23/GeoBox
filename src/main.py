@@ -13,9 +13,7 @@ from core.processor import DepthProcessor
 from core.config import ConfigManager
 from modules.color_maps import HybridColorMapper
 from modules.fluid_sim import FluidSimulator
-# --- NEW: DEM Module ---
 from modules.dem_loader import DEMHandler
-# -----------------------
 from ui.window import RenderWindow
 from ui.dashboard import GeoBoxDashboard
 
@@ -36,7 +34,8 @@ class GeoBoxEngine(QThread):
         self.conf_data = self.config_mgr.load()
 
         # 2. Initialize Logic Modules
-        self.calibrator = ProjectorCalibrator()
+        # Ensure calibrator is initialized with projector resolution
+        self.calibrator = ProjectorCalibrator(width=1024, height=768)
         self.calibrator.set_config(self.conf_data["roi"], self.conf_data["matrix"])
         
         self.processor = DepthProcessor(
@@ -47,10 +46,8 @@ class GeoBoxEngine(QThread):
         self.mapper.load_cpt_file("HeightColorMap.cpt")
         self.fluids = FluidSimulator()
         
-        # --- NEW: Initialize DEM Handler ---
         self.dem_handler = DEMHandler(target_width=640, target_height=480)
-        self.current_phys_height = None  # Storage for saving 
-        # -----------------------------------
+        self.current_phys_height = None
 
         # 3. Internal State
         self.running = False
@@ -66,9 +63,6 @@ class GeoBoxEngine(QThread):
         self.contours_on = False
         self.contour_int = 0.05
         self.flip_orientation = False 
-        self.output_scale_x = 1.0
-        self.output_scale_y = 1.0
-        self.calculate_scaling() 
 
         # 4. Wire Dashboard Inputs -> Engine Slots
         dash_signals.sea_changed.connect(self.set_sea)
@@ -87,11 +81,9 @@ class GeoBoxEngine(QThread):
         dash_signals.calib_next.connect(self.wiz_next)
         dash_signals.calib_finish.connect(self.wiz_finish)
         
-        # --- NEW: Wire DEM Signals ---
         dash_signals.dem_load_request.connect(self.load_dem_request)
         dash_signals.dem_save_request.connect(self.save_dem_request)
         dash_signals.dem_toggle.connect(self.toggle_dem)
-        # -----------------------------
 
     # --- SETTERS / SLOTS ---
     def set_sea(self, v): self.sea_offset = v
@@ -109,29 +101,18 @@ class GeoBoxEngine(QThread):
     def wiz_next(self): self.calib_trigger = True
     def trigger_auto(self): self.perform_auto_level = True
 
-    # --- NEW: DEM Slots ---
     def load_dem_request(self, filepath):
-        # Pass current depth range so the loaded image scales correctly to the sandbox
-        min_d = self.processor.min_d
-        max_d = self.processor.max_d
-        self.dem_handler.load_dem(filepath, min_d, max_d)
+        self.dem_handler.load_dem(filepath, self.processor.min_d, self.processor.max_d)
 
     def save_dem_request(self, filepath):
-        print(f"[Engine] Saving DEM to {filepath}...")
-        # Use the cached physics height map from the last frame
         if self.current_phys_height is not None:
-             success = self.dem_handler.save_dem(filepath, self.current_phys_height)
-             if not success: print("[Engine] Save Failed.")
-        else:
-             print("[Engine] Cannot save: No terrain data available yet.")
+             self.dem_handler.save_dem(filepath, self.current_phys_height)
 
     def toggle_dem(self, active):
         self.dem_handler.active = active
-    # ----------------------
 
     def update_roi(self, roi): 
         self.calibrator.roi = roi
-        self.calculate_scaling() 
         self.config_mgr.save(self.calibrator.roi, self.calibrator.matrix, [self.processor.min_d, self.processor.max_d])
         self.mode = "RUN"
 
@@ -140,19 +121,7 @@ class GeoBoxEngine(QThread):
             self.config_mgr.save(self.calibrator.roi, self.calibrator.matrix, [self.processor.min_d, self.processor.max_d])
         self.mode = "RUN"
 
-    def calculate_scaling(self):
-        rx, ry, rw, rh = self.calibrator.roi
-        if rw < 10 or rh < 10: 
-            self.output_scale_x = 1.0; self.output_scale_y = 1.0; return
-        self.output_scale_x = 640.0 / float(rw)
-        self.output_scale_y = 480.0 / float(rh)
-
-    # --- MOUSE INTERACTION ---
     def mouse_callback(self, event, x, y, flags, param):
-        """
-        Catches mouse clicks on the projector window 
-        and updates the fluid simulator's cursor.
-        """
         if event == cv2.EVENT_LBUTTONDOWN:
             self.fluids.set_interaction_point(x, y, True)
         elif event == cv2.EVENT_MOUSEMOVE and (flags & cv2.EVENT_FLAG_LBUTTON):
@@ -163,52 +132,36 @@ class GeoBoxEngine(QThread):
     # --- WORKER LOOP ---
     def run(self):
         print("[Engine] GeoBox Kernel Starting...")
-        
         kinect = None
         proj_win = None
         
         try:
-            # Import freenect here to avoid crashing if library is missing during UI init
             from core.kinect import KinectDevice
             kinect = KinectDevice()
             print("[Engine] Kinect Hardware Connected.")
-        except Exception as e:
-            print(f"[CRITICAL] Kinect Init Failed: {e}")
-            traceback.print_exc()
-            return 
-
-        try:
             proj_win = RenderWindow("GeoBox Projector")
-            
-            # Enable Mouse Interaction
             cv2.namedWindow("GeoBox Projector", cv2.WINDOW_NORMAL)
             cv2.setMouseCallback("GeoBox Projector", self.mouse_callback)
-            
         except Exception as e:
-            print(f"[CRITICAL] Window Init Failed: {e}")
-            if kinect: kinect.close()
+            print(f"[CRITICAL] Initialization Failed: {e}")
+            traceback.print_exc()
             return
 
         self.running = True
 
         while self.running:
             try:
-                # --- A. DATA ACQUISITION ---
                 d_raw = kinect.get_depth_frame()
                 if d_raw is None:
-                    self.msleep(5) 
-                    continue
+                    self.msleep(5); continue
 
                 dashboard_viz = None 
 
-                # --- B. MODE SWITCHING ---
-                
                 # [MODE 1] CALIBRATION WIZARD
                 if self.mode == "CALIB_WIZARD":
                     rgb = kinect.get_rgb_frame()
                     if rgb is not None:
                         pat = self.calibrator.generate_dynamic_pattern(self.wizard_step)
-                        
                         if self.flash_timer > 0:
                             overlay = np.zeros_like(pat)
                             color = (0, 255, 0) if self.flash_type == 1 else (0, 0, 255)
@@ -217,7 +170,6 @@ class GeoBoxEngine(QThread):
                             self.flash_timer -= 1
                         
                         proj_win.show(pat)
-                        
                         if self.calib_trigger:
                             success, viz = self.calibrator.capture_frame(rgb, d_raw, self.wizard_step)
                             dashboard_viz = viz
@@ -246,71 +198,41 @@ class GeoBoxEngine(QThread):
                 elif self.mode == "ROI":
                     viz = (d_raw / 2048.0 * 255).astype(np.uint8)
                     dashboard_viz = cv2.applyColorMap(viz, cv2.COLORMAP_JET)
-                    proj_win.show(np.zeros((480, 640, 3), dtype=np.uint8))
+                    proj_win.show(np.zeros((768, 1024, 3), dtype=np.uint8))
 
-                # [MODE 4] RUN SIMULATION (Main Loop)
+                # [MODE 4] RUN SIMULATION
                 elif self.mode == "RUN":
-                    # 1. Hard ROI Crop
-                    rx, ry, rw, rh = self.calibrator.roi
-                    masked_raw = np.ones_like(d_raw) * 2047 
-                    rx, ry = max(0, rx), max(0, ry)
-                    rw, rh = min(rw, 640-rx), min(rh, 480-ry)
+                    # --- SCALING FIX ---
+                    # The 11-coeff warp returns a 1024x768 frame automatically.
+                    # We no longer manually crop or resize back to 640x480.
+                    warped = self.calibrator.warp(d_raw)
                     
-                    if rw > 0 and rh > 0:
-                        masked_raw[ry:ry+rh, rx:rx+rw] = d_raw[ry:ry+rh, rx:rx+rw]
-
-                    # 2. Calibration Warp
-                    warped = self.calibrator.warp(masked_raw)
-                    if self.flip_orientation: warped = cv2.flip(warped, -1)
+                    if self.flip_orientation: 
+                        warped = cv2.flip(warped, -1)
                     
-                    # 3. Post-Scale 
-                    warped_cropped = warped[ry:ry+rh, rx:rx+rw]
-                    if warped_cropped.size == 0: continue
-                    
-                    warped_scaled = cv2.resize(warped_cropped, (640, 480), interpolation=cv2.INTER_LINEAR)
-                    
-                    # 4. Auto Level
                     if self.perform_auto_level:
-                        mn, mx = self.processor.auto_range(warped_scaled)
+                        mn, mx = self.processor.auto_range(warped)
                         self.processor.min_d, self.processor.max_d = mn, mx
                         self.range_auto_set.emit(mn, mx)
                         self.perform_auto_level = False
                     
-                    # 6. Height Map Generation
-                    vis_height = self.processor.normalize(warped_scaled)
-                    phys_height = self.processor.normalize_for_physics(warped_scaled)
-                    
-                    # --- NEW: Store for saving later ---
+                    vis_height = self.processor.normalize(warped)
+                    phys_height = self.processor.normalize_for_physics(warped)
                     self.current_phys_height = phys_height
-                    # -----------------------------------
                     
-                    # 7. Physics Step
                     fluid_visual = self.fluids.step(phys_height)
-                    
-                    # 8. Rendering
                     frame = self.mapper.apply(vis_height, self.sea_offset)
                     
-                    # --- NEW: DEM Guidance Overlay ---
                     if self.dem_handler.active:
-                        # Compare physical height to loaded DEM
-                        guidance_layer = self.dem_handler.compute_guidance_layer(phys_height)
-                        if guidance_layer is not None:
-                             # Blend overlay (0.6 original + 0.4 overlay)
-                             frame = cv2.addWeighted(frame, 0.6, guidance_layer, 0.4, 0)
-                    # ---------------------------------
+                        gl = self.dem_handler.compute_guidance_layer(phys_height)
+                        if gl is not None:
+                            frame = cv2.addWeighted(frame, 0.6, gl, 0.4, 0)
                     
-                    # 9. Overlay Fluid
                     if np.any(fluid_visual > 0):
-                        # Create an alpha mask based on water brightness
                         water_gray = cv2.cvtColor(fluid_visual, cv2.COLOR_BGR2GRAY)
-                        # Cap opacity at 80% to ensure sand is visible under water
-                        alpha = np.clip(water_gray / 100.0, 0, 0.8)
-                        alpha = alpha[:, :, np.newaxis] 
-                        
-                        # Blend: Frame * (1-alpha) + Water * alpha
+                        alpha = np.clip(water_gray / 100.0, 0, 0.8)[:, :, np.newaxis] 
                         frame = (frame * (1.0 - alpha) + fluid_visual * alpha).astype(np.uint8)
                     
-                    # Overlay Contours
                     if self.contours_on:
                         cl = self.processor.get_contour_layer(vis_height, self.contour_int)
                         if cl is not None:
@@ -318,21 +240,12 @@ class GeoBoxEngine(QThread):
                             for c in range(3):
                                 frame[:,:,c] = (ac*cl[:,:,c] + (1-ac)*frame[:,:,c]).astype(np.uint8)
 
-                    # HUD Overlay
-                    try:
-                        h_in, w_in = warped_scaled.shape
-                        val = warped_scaled[h_in//2, w_in//2]
-                        depth_mm = int(val) if np.isfinite(val) else 0
-                    except: pass
-
                     proj_win.show(frame)
                     dashboard_viz = frame
 
-                # --- C. UPDATE UI ---
                 if dashboard_viz is not None:
                     self.frame_ready.emit(dashboard_viz)
 
-                # --- D. WINDOW EVENTS ---
                 if not proj_win.process_input():
                     self.running = False
 
@@ -347,21 +260,14 @@ class GeoBoxEngine(QThread):
 
 def main():
     app = QApplication(sys.argv)
-    
     dash = GeoBoxDashboard()
     engine = GeoBoxEngine(dash.signals)
-    
     engine.frame_ready.connect(dash.update_feed)
     engine.range_auto_set.connect(dash.set_depth_sliders)
-
     if hasattr(dash, 'video'):
          dash.video.roi_selected.connect(engine.update_roi)
-    else:
-         print("[WARNING] dash.video not found. ROI selection may not work.")
-    
     dash.show()
     engine.start() 
-    
     sys.exit(app.exec())
 
 if __name__ == "__main__":
