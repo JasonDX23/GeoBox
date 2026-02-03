@@ -18,11 +18,11 @@ class FluidSimulator:
         self.gravity = 9.81
         
         # 1. Pipe Capacity: Increased 1.2 -> 2.5 (Wide pipes = fast spreading)
-        self.cross_sect = 2.5   
+        self.cross_sect = 2.0   
         
         # 2. Simulation Speed: Increased 8 -> 20 updates per frame
         # This makes the water travel much further per video frame.
-        self.sub_steps = 20 
+        self.sub_steps = 30 
         
         # 3. Time Step: Reduced slightly for stability (since steps are higher)
         self.dt = 0.01        

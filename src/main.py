@@ -13,7 +13,10 @@ from core.processor import DepthProcessor
 from core.config import ConfigManager
 from modules.color_maps import HybridColorMapper
 from modules.fluid_sim import FluidSimulator
+<<<<<<< HEAD
 from modules.dem_loader import DEMHandler
+=======
+>>>>>>> parent of e7354a3 (added frame filtering and changed contour colours. For next: add option to change contour colours)
 from ui.window import RenderWindow
 from ui.dashboard import GeoBoxDashboard
 
@@ -45,9 +48,12 @@ class GeoBoxEngine(QThread):
         self.mapper = HybridColorMapper()
         self.mapper.load_cpt_file("HeightColorMap.cpt")
         self.fluids = FluidSimulator()
+<<<<<<< HEAD
         
         self.dem_handler = DEMHandler(target_width=640, target_height=480)
         self.current_phys_height = None
+=======
+>>>>>>> parent of e7354a3 (added frame filtering and changed contour colours. For next: add option to change contour colours)
 
         # 3. Internal State
         self.running = False
@@ -80,10 +86,13 @@ class GeoBoxEngine(QThread):
         dash_signals.calib_start.connect(self.wiz_start)
         dash_signals.calib_next.connect(self.wiz_next)
         dash_signals.calib_finish.connect(self.wiz_finish)
+<<<<<<< HEAD
         
         dash_signals.dem_load_request.connect(self.load_dem_request)
         dash_signals.dem_save_request.connect(self.save_dem_request)
         dash_signals.dem_toggle.connect(self.toggle_dem)
+=======
+>>>>>>> parent of e7354a3 (added frame filtering and changed contour colours. For next: add option to change contour colours)
 
     # --- SETTERS / SLOTS ---
     def set_sea(self, v): self.sea_offset = v
@@ -101,6 +110,7 @@ class GeoBoxEngine(QThread):
     def wiz_next(self): self.calib_trigger = True
     def trigger_auto(self): self.perform_auto_level = True
 
+<<<<<<< HEAD
     def load_dem_request(self, filepath):
         self.dem_handler.load_dem(filepath, self.processor.min_d, self.processor.max_d)
 
@@ -111,6 +121,8 @@ class GeoBoxEngine(QThread):
     def toggle_dem(self, active):
         self.dem_handler.active = active
 
+=======
+>>>>>>> parent of e7354a3 (added frame filtering and changed contour colours. For next: add option to change contour colours)
     def update_roi(self, roi): 
         self.calibrator.roi = roi
         self.config_mgr.save(self.calibrator.roi, self.calibrator.matrix, [self.processor.min_d, self.processor.max_d])
@@ -136,10 +148,20 @@ class GeoBoxEngine(QThread):
         proj_win = None
         
         try:
+<<<<<<< HEAD
             from core.kinect import KinectDevice
+=======
+            import freenect 
+>>>>>>> parent of e7354a3 (added frame filtering and changed contour colours. For next: add option to change contour colours)
             kinect = KinectDevice()
             print("[Engine] Kinect Hardware Connected.")
             proj_win = RenderWindow("GeoBox Projector")
+<<<<<<< HEAD
+=======
+            
+            # --- NEW: Enable Mouse Interaction ---
+            # Create window immediately to attach callback
+>>>>>>> parent of e7354a3 (added frame filtering and changed contour colours. For next: add option to change contour colours)
             cv2.namedWindow("GeoBox Projector", cv2.WINDOW_NORMAL)
             cv2.setMouseCallback("GeoBox Projector", self.mouse_callback)
         except Exception as e:
@@ -216,18 +238,30 @@ class GeoBoxEngine(QThread):
                         self.range_auto_set.emit(mn, mx)
                         self.perform_auto_level = False
                     
+<<<<<<< HEAD
                     vis_height = self.processor.normalize(warped)
                     phys_height = self.processor.normalize_for_physics(warped)
                     self.current_phys_height = phys_height
                     
+=======
+                    # 6. Height Map Generation
+                    vis_height = self.processor.normalize(warped_scaled)
+                    phys_height = self.processor.normalize_for_physics(warped_scaled)
+                    
+                    # 7. Physics Step (Returns Electric Blue Image)
+>>>>>>> parent of e7354a3 (added frame filtering and changed contour colours. For next: add option to change contour colours)
                     fluid_visual = self.fluids.step(phys_height)
                     frame = self.mapper.apply(vis_height, self.sea_offset)
                     
+<<<<<<< HEAD
                     if self.dem_handler.active:
                         gl = self.dem_handler.compute_guidance_layer(phys_height)
                         if gl is not None:
                             frame = cv2.addWeighted(frame, 0.6, gl, 0.4, 0)
                     
+=======
+                    # 9. Overlay Fluid
+>>>>>>> parent of e7354a3 (added frame filtering and changed contour colours. For next: add option to change contour colours)
                     if np.any(fluid_visual > 0):
                         water_gray = cv2.cvtColor(fluid_visual, cv2.COLOR_BGR2GRAY)
                         alpha = np.clip(water_gray / 100.0, 0, 0.8)[:, :, np.newaxis] 
