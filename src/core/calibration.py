@@ -33,18 +33,15 @@ class ProjectorCalibrator:
     def reset_collection(self):
         self.collected_in, self.collected_out, self.calibrated = [], [], False
 
-    def generate_dynamic_pattern(self, step):
-        pattern = np.ones((self.proj_res[1], self.proj_res[0], 3), dtype=np.uint8) * 255
-        cx, cy = self.proj_res[0] // 2, self.proj_res[1] // 2
-        sx, sy = (step % 3 - 1) * 150, (step // 3 - 1) * 100
-        start_x, start_y = cx - 120 + sx, cy - 90 + sy
-        for i in range(4):
-            for j in range(5):
-                if (i + j) % 2 == 0:
-                    cv2.rectangle(pattern, (int(start_x + j*60), int(start_y + i*60)),
-                                  (int(start_x + (j+1)*60), int(start_y + (i+1)*60)), (0,0,0), -1)
-        self._last_offset = (start_x, start_y)
-        return pattern
+    def set_config(self, roi, matrix_list):
+        self.roi = roi
+        mat = np.array(matrix_list, dtype=np.float32)
+        # Force resize to (2, 6) if an old config is loaded
+        if mat.shape != (2, 6):
+            self.matrix = np.zeros((2, 6), dtype=np.float32)
+            self.matrix[0, 0], self.matrix[1, 1] = 1.0, 1.0
+        else:
+            self.matrix = mat
 
     def capture_frame(self, color, depth, step):
         viz = color.copy()
