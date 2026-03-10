@@ -6,7 +6,9 @@ dist/
 wheels/
 *.egg-info
 assets/config/
-
+assets/
+tests/
+References/
 # Virtual environments
 .venv
 open_ar_sandbox.txt
